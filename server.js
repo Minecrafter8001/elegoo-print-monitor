@@ -10,6 +10,13 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
+var CAMERA_CACHE_MS = 1000; // Poll camera every 1 second
+const STATUS_POLL_INTERVAL = 2000;
+const CAMERA_ACK_ERRORS = {
+  1: 'Exceeded maximum simultaneous streaming limit',
+  2: 'Camera does not exist',
+  3: 'Unknown error'
+};
 
 // Store printer data
 let printerClient = null;
@@ -18,19 +25,27 @@ let printerStatus = {
   printerName: 'Unknown',
   state: 'Disconnected',
   progress: 0,
+  layerProgress: 0,
   temperatures: {
     bed: { current: 0, target: 0 },
-    nozzle: { current: 0, target: 0 }
+    nozzle: { current: 0, target: 0 },
+    enclosure: { current: 0, target: 0 }
   },
   currentFile: '',
   printTime: 0,
   remainingTime: 0,
-  cameraURL: null,
+  calculatedTime: null,
+  cameraAvailable: false,
   lastUpdate: null
 };
 
-// WebSocket clients connected to the web interface
+// WebSocket clients
 const webClients = new Set();
+
+// Camera stream
+let cameraStreamURL = null;
+let printerStream = null;
+const cameraSubscribers = new Set(); // Clients subscribed to camera stream
 
 // Serve static files
 app.use(express.static('public'));
@@ -51,39 +66,31 @@ app.get('/api/discover', async (req, res) => {
   }
 });
 
+app.get('/api/camera', async (req, res) => {
+  const boundary = 'foo';
+  res.setHeader('Content-Type', `multipart/x-mixed-replace; boundary=${boundary}`);
+
+  // Subscribe this client to the stream
+  const subscriber = (chunk) => {
+    try {
+      res.write(chunk);
+    } catch (err) {
+      cameraSubscribers.delete(subscriber);
+    }
+  };
+
+  cameraSubscribers.add(subscriber);
+
+  // Handle client disconnect
+  req.on('close', () => {
+    cameraSubscribers.delete(subscriber);
+  });
+});
+
 // API endpoint to connect to a specific printer
 app.post('/api/connect/:ip', express.json(), async (req, res) => {
-  const printerIP = req.params.ip;
-  
   try {
-    // Disconnect existing connection
-    if (printerClient) {
-      printerClient.disconnect();
-    }
-
-    // Create new connection
-    printerClient = new SDCPClient(printerIP);
-    
-    // Set up status callback
-    printerClient.onStatus((data) => {
-      updatePrinterStatus(data);
-    });
-
-    // Connect
-    await printerClient.connect();
-    
-    // Start polling
-    printerClient.startStatusPolling(2000);
-    
-    // Request camera URL
-    const cameraResponse = await printerClient.requestCameraURL();
-    if (cameraResponse && cameraResponse.Data && cameraResponse.Data.Data) {
-      printerStatus.cameraURL = cameraResponse.Data.Data.Url || null;
-    }
-
-    printerStatus.connected = true;
-    broadcastToClients({ type: 'status', data: printerStatus });
-
+    await connectToPrinter(req.params.ip);
     res.json({ success: true, message: 'Connected to printer' });
   } catch (err) {
     printerStatus.connected = false;
@@ -114,8 +121,17 @@ wss.on('connection', (ws) => {
 /**
  * Update printer status from SDCP data
  */
+let isFirstUpdate = true;
 function updatePrinterStatus(data) {
   if (!data) return;
+
+  // Log first status update for debugging
+  if (isFirstUpdate) {
+    console.log('\n=== First Status Update from Printer ===');
+    console.log(JSON.stringify(data, null, 2));
+    console.log('========================================\n');
+    isFirstUpdate = false;
+  }
 
   printerStatus.lastUpdate = new Date().toISOString();
 
@@ -124,11 +140,13 @@ function updatePrinterStatus(data) {
     printerStatus.printerName = data.Attributes.Name || printerStatus.printerName;
   }
 
-  if (data.Data) {
-    const d = data.Data;
+  // Handle actual printer status structure
+  if (data.Status) {
+    const s = data.Status;
     
-    // Print state
-    if (d.Status !== undefined) {
+    // Print state from CurrentStatus array
+    if (s.CurrentStatus && s.CurrentStatus.length > 0) {
+      const status = s.CurrentStatus[0];
       const stateMap = {
         0: 'Idle',
         1: 'Printing',
@@ -136,31 +154,55 @@ function updatePrinterStatus(data) {
         3: 'Completed',
         4: 'Error'
       };
-      printerStatus.state = stateMap[d.Status] || 'Unknown';
+      printerStatus.state = stateMap[status] || 'Unknown';
     }
 
     // Print progress
-    if (d.PrintInfo) {
-      printerStatus.progress = d.PrintInfo.Progress || 0;
-      printerStatus.currentFile = d.PrintInfo.Filename || '';
-      printerStatus.printTime = d.PrintInfo.PrintTime || 0;
-      printerStatus.remainingTime = d.PrintInfo.RemainTime || 0;
+    if (s.PrintInfo) {
+      // Use printer-reported progress directly
+      printerStatus.progress = s.PrintInfo.Progress || 0;
+      printerStatus.currentFile = s.PrintInfo.Filename || '';
+      
+      // Convert ticks to seconds for time display
+      printerStatus.printTime = Math.floor(s.PrintInfo.CurrentTicks || 0);
+      const totalTicks = s.PrintInfo.TotalTicks || 0;
+      printerStatus.remainingTime = Math.floor(totalTicks - printerStatus.printTime);
+      
+      // Calculate precise progress from current/total layers (6 decimal places)
+      const currentLayer = s.PrintInfo.CurrentLayer || 0;
+      const totalLayer = s.PrintInfo.TotalLayer || 0;
+      if (totalLayer > 0) {
+        printerStatus.layerProgress = Number(((currentLayer / totalLayer) * 100).toFixed(6));
+      } else {
+        printerStatus.layerProgress = 0;
+      }
+      
+      // Calculate ETA based on progress
+      if (printerStatus.progress > 0 && printerStatus.printTime > 0) {
+        const estimatedTotalTime = printerStatus.printTime / (printerStatus.progress / 100);
+        const calculatedRemaining = Math.max(0, Math.floor(estimatedTotalTime - printerStatus.printTime));
+        printerStatus.calculatedTime = calculatedRemaining;
+      }
     }
 
-    // Temperatures
-    if (d.TempInfo) {
-      if (d.TempInfo.BedTemp !== undefined) {
-        printerStatus.temperatures.bed.current = d.TempInfo.BedTemp;
-      }
-      if (d.TempInfo.BedTargetTemp !== undefined) {
-        printerStatus.temperatures.bed.target = d.TempInfo.BedTargetTemp;
-      }
-      if (d.TempInfo.NozzleTemp !== undefined) {
-        printerStatus.temperatures.nozzle.current = d.TempInfo.NozzleTemp;
-      }
-      if (d.TempInfo.NozzleTargetTemp !== undefined) {
-        printerStatus.temperatures.nozzle.target = d.TempInfo.NozzleTargetTemp;
-      }
+    // Temperatures - using actual field names from printer
+    if (s.TempOfHotbed !== undefined) {
+      printerStatus.temperatures.bed.current = Math.round(s.TempOfHotbed);
+    }
+    if (s.TempTargetHotbed !== undefined) {
+      printerStatus.temperatures.bed.target = Math.round(s.TempTargetHotbed);
+    }
+    if (s.TempOfNozzle !== undefined) {
+      printerStatus.temperatures.nozzle.current = Math.round(s.TempOfNozzle);
+    }
+    if (s.TempTargetNozzle !== undefined) {
+      printerStatus.temperatures.nozzle.target = Math.round(s.TempTargetNozzle);
+    }
+    if (s.TempOfBox !== undefined) {
+      printerStatus.temperatures.enclosure.current = Math.round(s.TempOfBox);
+    }
+    if (s.TempTargetBox !== undefined) {
+      printerStatus.temperatures.enclosure.target = Math.round(s.TempTargetBox);
     }
   }
 
@@ -181,6 +223,123 @@ function broadcastToClients(message) {
 }
 
 /**
+ * Setup camera URL from printer response
+ */
+async function setupCameraURL() {
+  if (!printerClient) return;
+
+  try {
+    const cameraResponse = await printerClient.requestCameraURL();
+    const cameraData = cameraResponse?.Data?.Data;
+    
+    if (!cameraData) return;
+
+    const { Ack: ack, VideoUrl: videoUrl } = cameraData;
+    
+    if (ack === 0 && videoUrl) {
+      printerStatus.cameraAvailable = true;
+      // Store the URL locally for polling, but don't send to clients
+      cameraStreamURL = `http://${videoUrl}`;
+      console.log('Camera stream enabled');
+    } else {
+      console.warn('Camera not available:', CAMERA_ACK_ERRORS[ack] || `Unknown error code ${ack}`);
+      printerStatus.cameraAvailable = false;
+    }
+  } catch (err) {
+    console.warn('Failed to setup camera:', err.message);
+    printerStatus.cameraAvailable = false;
+  }
+}
+
+/**
+ * Connect to a printer at the given IP address
+ */
+async function connectToPrinter(printerIP, printerName = null) {
+  // Disconnect existing connection
+  if (printerClient) {
+    printerClient.disconnect();
+  }
+
+  // Create new connection
+  printerClient = new SDCPClient(printerIP);
+  printerClient.onStatus(updatePrinterStatus);
+
+  // Connect and start polling
+  await printerClient.connect();
+  printerClient.startStatusPolling(STATUS_POLL_INTERVAL);
+  
+  // Setup camera
+  await setupCameraURL();
+
+  // Update status
+  printerStatus.connected = true;
+  if (printerName) {
+    printerStatus.printerName = printerName;
+  }
+  broadcastToClients({ type: 'status', data: printerStatus });
+}
+
+/**
+ * Start persistent camera stream from printer and relay to clients
+ */
+async function startCameraStreaming() {
+  if (!cameraStreamURL) return;
+
+  try {
+    const response = await fetch(cameraStreamURL);
+    
+    if (!response.ok) {
+      throw new Error(`Camera error ${response.status}, ${response.statusText}`);
+    }
+
+    const reader = response.body.getReader();
+
+    const processStream = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = Buffer.from(value);
+          
+          // Broadcast chunk to all subscribers
+          cameraSubscribers.forEach(subscriber => {
+            subscriber(chunk);
+          });
+        }
+      } catch (err) {
+        console.error('Camera stream error:', err.message);
+        // Retry after a delay
+        setTimeout(() => {
+          if (cameraStreamURL) {
+            startCameraStreaming();
+          }
+        }, 5000);
+      }
+    };
+
+    printerStream = processStream();
+  } catch (err) {
+    console.error('Failed to start camera stream:', err.message);
+    // Retry after a delay
+    setTimeout(() => {
+      if (cameraStreamURL) {
+        startCameraStreaming();
+      }
+    }, 5000);
+  }
+}
+
+/**
+ * Stop camera streaming
+ */
+function stopCameraStreaming() {
+  if (printerStream) {
+    printerStream = null;
+  }
+}
+
+/**
  * Auto-discover and connect to first printer
  */
 async function autoConnect() {
@@ -189,30 +348,23 @@ async function autoConnect() {
     const discovery = new PrinterDiscovery();
     const printers = await discovery.discover(5000);
     
-    if (printers.length > 0) {
-      const printer = printers[0];
-      console.log('Found printer at:', printer.address);
-      
-      printerClient = new SDCPClient(printer.address);
-      printerClient.onStatus((data) => {
-        updatePrinterStatus(data);
-      });
-
-      await printerClient.connect();
-      printerClient.startStatusPolling(2000);
-      
-      // Request camera URL
-      const cameraResponse = await printerClient.requestCameraURL();
-      if (cameraResponse && cameraResponse.Data && cameraResponse.Data.Data) {
-        printerStatus.cameraURL = cameraResponse.Data.Data.Url || null;
-      }
-
-      printerStatus.connected = true;
-      printerStatus.printerName = printer.Name || printer.Id || 'Elegoo Printer';
-      console.log('Connected to printer:', printerStatus.printerName);
-    } else {
+    if (printers.length === 0) {
       console.log('No printers found on network');
+      return;
     }
+
+    const printer = printers[0];
+    console.log('Found printer at:', printer.address);
+    
+    await connectToPrinter(
+      printer.address,
+      printer.Name || printer.Id || 'Elegoo Printer'
+    );
+    
+    console.log('Connected to printer:', printerStatus.printerName);
+    
+    // Start camera streaming
+    await startCameraStreaming();
   } catch (err) {
     console.error('Auto-connect failed:', err.message);
   }
@@ -229,6 +381,7 @@ server.listen(PORT, () => {
 // Cleanup on exit
 process.on('SIGINT', () => {
   console.log('\nShutting down...');
+  stopCameraStreaming();
   if (printerClient) {
     printerClient.disconnect();
   }

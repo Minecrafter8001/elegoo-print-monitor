@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Elegoo Print Monitor</title>
+    <title>Print Monitor</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/png" href="Favicon.png">
 </head>
 <body>
     <div class="container">
@@ -51,12 +52,24 @@
                 </div>
                 <div class="time-info">
                     <div class="time-item">
-                        <span class="label">Print Time:</span>
+                        <span class="label">Elapsed Time:</span>
                         <span class="value" id="printTime">-</span>
                     </div>
                     <div class="time-item">
-                        <span class="label">Remaining:</span>
+                        <span class="label">Reported Remaning:</span>
                         <span class="value" id="remainingTime">-</span>
+                    </div>
+                    <div class="time-item">
+                        <span class="label">Calculated Remaning:</span>
+                        <span class="value" id="calculatedTime">-</span>
+                    </div>
+                    <div class= "time-item">
+                        <span class="label">Reported ETA:</span>
+                        <span class="value" id="ReportedETA">-</span>
+                    </div>
+                    <div class="time-item">
+                        <span class="label">Calculated ETA:</span>
+                        <span class="value" id="CalculatedETA">-</span>
                     </div>
                 </div>
             </div>
@@ -82,6 +95,16 @@
                             <div class="temp-value">
                                 <span id="bedTemp">0</span>°C / 
                                 <span id="bedTarget">0</span>°C
+                            </div>
+                        </div>
+                    </div>
+                        <div class="temp-item">
+                        <div class="temp-icon">E</div>
+                        <div class="temp-info">
+                            <div class="temp-label">Enclosure</div>
+                            <div class="temp-value">
+                                <span id="enclosureTemp">0</span>°C / 
+                                <span id="enclosureTarget">0</span>°C
                             </div>
                         </div>
                     </div>

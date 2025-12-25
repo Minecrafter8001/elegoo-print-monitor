@@ -92,9 +92,9 @@ class SDCPClient {
       // Handle different message topics
       if (message.Topic) {
         if (message.Topic.includes('status') && this.statusCallback) {
-          this.statusCallback(message.Data);
+          this.statusCallback(message);
         } else if (message.Topic.includes('attributes') && this.statusCallback) {
-          this.statusCallback(message.Data);
+          this.statusCallback(message);
         }
       }
 
@@ -166,8 +166,8 @@ class SDCPClient {
   async requestStatus() {
     try {
       const response = await this.sendCommand(0);
-      if (this.statusCallback && response.Data) {
-        this.statusCallback(response.Data);
+      if (this.statusCallback && response) {
+        this.statusCallback(response);
       }
       return response;
     } catch (err) {
@@ -182,8 +182,8 @@ class SDCPClient {
   async requestAttributes() {
     try {
       const response = await this.sendCommand(1);
-      if (this.statusCallback && response.Data) {
-        this.statusCallback(response.Data);
+      if (this.statusCallback && response) {
+        this.statusCallback(response);
       }
       return response;
     } catch (err) {
@@ -197,7 +197,13 @@ class SDCPClient {
    */
   async requestCameraURL() {
     try {
-      return await this.sendCommand(386);
+      console.log('Requesting camera URL'); 
+      // Send Status: 1 to enable video stream according to SDCP protocol
+      const data = await this.sendCommand(386, {Enable: 1 });
+      console.log('Received camera URL:', data);
+      if (data.Data.Ack == 3)
+        throw new Error('Camera not available');
+      return data;
     } catch (err) {
       console.error('Failed to request camera URL:', err.message);
       return null;

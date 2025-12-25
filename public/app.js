@@ -16,6 +16,7 @@ function connectWebSocket() {
     
     ws.onmessage = (event) => {
         try {
+            console.log('Message from server:', event.data);
             const message = JSON.parse(event.data);
             
             // Handle different message types
@@ -95,14 +96,31 @@ function updateUI(status) {
         document.getElementById('lastUpdate').textContent = '-';
     }
     
-    // Progress
-    const progress = Math.round(status.progress || 0);
+    // Progress (6 decimal precision for calculations, 2 for display)
+    const progress = Number((status.layerProgress || 0).toFixed(6));
     document.getElementById('progressFill').style.width = `${progress}%`;
-    document.getElementById('progressText').textContent = `${progress}%`;
+    document.getElementById('progressText').textContent = `${progress.toFixed(2)}%`;
     
     // Print time
     document.getElementById('printTime').textContent = formatTime(status.printTime || 0);
     document.getElementById('remainingTime').textContent = formatTime(status.remainingTime || 0);
+    document.getElementById('calculatedTime').textContent = formatTime(status.calculatedTime || 0);
+    
+    // Calculate and display ETAs
+    const currentTime = Date.now();
+    const reportedETA = new Date(currentTime + (status.remainingTime || 0) * 1000);
+    document.getElementById('ReportedETA').textContent = reportedETA.toLocaleTimeString();
+    
+    const calculatedETA = new Date(currentTime + (status.calculatedTime || 0) * 1000);
+    document.getElementById('CalculatedETA').textContent = calculatedETA.toLocaleTimeString();
+    
+    if (progress >= 100 || status.state === 'idle') {
+        document.getElementById('ReportedETA').textContent = '-';
+        document.getElementById('CalculatedETA').textContent = '-';
+        document.getElementById('remainingTime').textContent = '-';
+        document.getElementById('calculatedTime').textContent = '-';
+    }
+
     
     // Temperatures
     const temps = status.temperatures || { bed: { current: 0, target: 0 }, nozzle: { current: 0, target: 0 } };
@@ -110,13 +128,16 @@ function updateUI(status) {
     document.getElementById('nozzleTarget').textContent = Math.round(temps.nozzle.target || 0);
     document.getElementById('bedTemp').textContent = Math.round(temps.bed.current || 0);
     document.getElementById('bedTarget').textContent = Math.round(temps.bed.target || 0);
+    document.getElementById('enclosureTemp').textContent = Math.round(temps.enclosure.current || 0);
+    document.getElementById('enclosureTarget').textContent = Math.round(temps.enclosure.target || 0);
     
     // Camera feed
     const cameraFeed = document.getElementById('cameraFeed');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     
-    if (status.cameraURL) {
-        cameraFeed.src = status.cameraURL;
+    if (status.cameraAvailable) {
+        // Fetch camera from server endpoint
+        cameraFeed.src = '/api/camera';
         cameraFeed.style.display = 'block';
         cameraPlaceholder.style.display = 'none';
     } else {
