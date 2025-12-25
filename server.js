@@ -46,6 +46,8 @@ const webClients = new Set();
 let cameraStreamURL = null;
 let printerStream = null;
 const cameraSubscribers = new Set(); // Clients subscribed to camera stream
+let latestFrame = null;
+const cameraContentType = 'image/jpeg';
 
 // User counters and tracking
 const userStats = {
@@ -146,19 +148,29 @@ app.get('/api/discover', async (req, res) => {
 });
 
 app.get('/api/camera', async (req, res) => {
-  const boundary = 'foo';
+  const boundary = 'frame';
   res.setHeader('Content-Type', `multipart/x-mixed-replace; boundary=${boundary}`);
+  res.write(`--${boundary}\r\n`);
 
-  // Subscribe this client to the stream
-  const subscriber = (chunk) => {
+  // Subscriber writes full frames
+  const subscriber = (frameBuffer) => {
     try {
-      res.write(chunk);
+      res.write(`Content-Type: ${cameraContentType}\r\n`);
+      res.write(`Content-Length: ${frameBuffer.length}\r\n\r\n`);
+      res.write(frameBuffer);
+      res.write(`\r\n--${boundary}\r\n`);
     } catch (err) {
       cameraSubscribers.delete(subscriber);
     }
   };
 
   cameraSubscribers.add(subscriber);
+
+  // Send latest frame immediately if we have one
+  if (latestFrame) {
+    subscriber(latestFrame);
+  }
+
   // Track IP and counters
   try {
     const ip = getClientIP(req, req.socket);
@@ -171,11 +183,15 @@ app.get('/api/camera', async (req, res) => {
   updateUserStatsAndBroadcast();
 
   // Handle client disconnect
-  req.on('close', () => {
+  const cleanup = () => {
     cameraSubscribers.delete(subscriber);
     userStats.cameraClients = Math.max(0, userStats.cameraClients - 1);
     updateUserStatsAndBroadcast();
-  });
+  };
+
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+  res.on('error', cleanup);
 });
 
 // API endpoint to connect to a specific printer
@@ -395,7 +411,14 @@ async function startCameraStreaming() {
       throw new Error(`Camera error ${response.status}, ${response.statusText}`);
     }
 
+    // Extract boundary from multipart content-type header
+    const contentType = response.headers.get('content-type');
+    const boundaryMatch = contentType?.match(/boundary=([^\s;]+)/);
+    const boundary = boundaryMatch ? boundaryMatch[1].replace(/^-+/, '') : 'frame';
+    const boundaryBuffer = Buffer.from('--' + boundary);
+
     const reader = response.body.getReader();
+    let buffer = Buffer.alloc(0);
 
     const processStream = async () => {
       try {
@@ -403,12 +426,48 @@ async function startCameraStreaming() {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = Buffer.from(value);
-          
-          // Broadcast chunk to all subscribers
-          cameraSubscribers.forEach(subscriber => {
-            subscriber(chunk);
-          });
+          buffer = Buffer.concat([buffer, Buffer.from(value)]);
+
+          // Look for boundary
+          let boundaryIndex = buffer.indexOf(boundaryBuffer);
+          while (boundaryIndex !== -1) {
+            // Find the end of headers (double CRLF) after boundary
+            const headersStart = boundaryIndex + boundaryBuffer.length;
+            const headersEnd = buffer.indexOf(Buffer.from('\r\n\r\n'), headersStart);
+            if (headersEnd === -1) break;
+
+            const frameDataStart = headersEnd + 4; // Skip the \r\n\r\n
+
+            // Find next boundary after this frame
+            const nextBoundaryIndex = buffer.indexOf(boundaryBuffer, frameDataStart);
+            if (nextBoundaryIndex === -1) break;
+
+            // Extract frame data (trim trailing CRLF)
+            let frameEnd = nextBoundaryIndex;
+            if (buffer[frameEnd - 2] === 0x0D && buffer[frameEnd - 1] === 0x0A) {
+              frameEnd -= 2;
+            } else if (buffer[frameEnd - 1] === 0x0A) {
+              frameEnd -= 1;
+            }
+
+            const frameBuffer = buffer.subarray(frameDataStart, frameEnd);
+
+            if (frameBuffer.length > 0) {
+              latestFrame = Buffer.from(frameBuffer);
+              // Broadcast frame to all subscribers
+              cameraSubscribers.forEach(subscriber => {
+                try {
+                  subscriber(latestFrame);
+                } catch (err) {
+                  // Subscriber cleanup handled in endpoint
+                }
+              });
+            }
+
+            // Remove processed part
+            buffer = buffer.subarray(nextBoundaryIndex);
+            boundaryIndex = buffer.indexOf(boundaryBuffer);
+          }
         }
       } catch (err) {
         console.error('Camera stream error:', err.message);
@@ -437,9 +496,7 @@ async function startCameraStreaming() {
  * Stop camera streaming
  */
 function stopCameraStreaming() {
-  if (printerStream) {
-    printerStream = null;
-  }
+  printerStream = null;
 }
 
 /**

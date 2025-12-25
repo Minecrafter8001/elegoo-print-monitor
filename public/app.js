@@ -1,6 +1,8 @@
 // WebSocket connection to the server
 let ws = null;
 let reconnectInterval = null;
+let cameraInitialized = false;
+let snapshotTaken = false;
 
 // Connect to WebSocket server
 function connectWebSocket() {
@@ -141,12 +143,42 @@ function updateUI(payload) {
     // Camera feed
     const cameraFeed = document.getElementById('cameraFeed');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+    const cameraOverlay = document.getElementById('cameraOverlay');
     
     if (printer.cameraAvailable) {
+        if (printer.state.toLowerCase() === "idle")   {
+            // On first load when idle, request a single frame then convert to static image
+            if (!cameraInitialized) {
+                cameraFeed.src = '/api/camera';
+                cameraInitialized = true;
+                
+                // Capture frame to canvas after loading, then replace with static data URL
+                cameraFeed.onload = function captureFrame() {
+                    if (!snapshotTaken && printer.state?.toLowerCase() === "idle") {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = cameraFeed.naturalWidth;
+                        canvas.height = cameraFeed.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(cameraFeed, 0, 0);
+                        cameraFeed.src = canvas.toDataURL('image/jpeg');
+                        snapshotTaken = true;
+                        cameraFeed.onload = null; // Remove this handler
+                    }
+                };
+            }
+            // Keep last frame visible but show idle overlay
+            cameraFeed.style.display = 'block';
+            cameraPlaceholder.style.display = 'none';
+            cameraOverlay.style.display = 'flex';
+            return;
+        }
         // Fetch camera from server endpoint
         cameraFeed.src = '/api/camera';
+        cameraInitialized = true;
+        snapshotTaken = false; // Reset snapshot flag when printing
         cameraFeed.style.display = 'block';
         cameraPlaceholder.style.display = 'none';
+        cameraOverlay.style.display = 'none';
     } else {
         cameraFeed.style.display = 'none';
         cameraPlaceholder.style.display = 'flex';
