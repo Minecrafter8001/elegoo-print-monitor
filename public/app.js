@@ -105,11 +105,15 @@ function clearReconnectInterval() {
 function updateUI(payload) {
     const printer = payload?.printer || {};
     const users = payload?.users || {};
+    const now = new Date();
 
     // Connection status
     const statusIndicator = document.getElementById('connectionStatus');
     const connectionText = document.getElementById('connectionText');
     const userCountText = document.getElementById('userCount');
+
+    // Current time
+    document.getElementById('currentTime').textContent = formatClockTime(now);
 
     if (printer.connected) {
         statusIndicator.classList.add('connected');
@@ -154,8 +158,6 @@ function updateUI(payload) {
     document.getElementById('calculatedTime').textContent =
         formatDuration(printer.calculatedTime);
 
-    // ETAs
-    const now = Date.now();
 
     if (printer.remainingTime > 0 && printer.state !== 'idle') {
         document.getElementById('ReportedETA').textContent =
