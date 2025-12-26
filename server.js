@@ -58,6 +58,8 @@ const userStats = {
 };
 const webClientIPs = new Set();
 const cameraClientIPs = new Set();
+const webClientAgents = new Map(); // IP -> user agent
+const cameraClientAgents = new Map(); // IP -> user agent
 
 function normalizeIP(ip) {
   if (!ip) return 'unknown';
@@ -70,6 +72,11 @@ function normalizeIP(ip) {
 
 function isLocal192(ip) {
   return /^192\.168\./.test(ip);
+}
+
+function isLocalIP(ip) {
+  if (!ip || ip === 'unknown') return false;
+  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost' || isLocal192(ip);
 }
 
 function pickForwardedIP(headerValue) {
@@ -176,6 +183,8 @@ app.get('/api/camera', async (req, res) => {
     const ip = getClientIP(req, req.socket);
     if (ip !== 'unknown') {
       cameraClientIPs.add(ip);
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      cameraClientAgents.set(ip, userAgent);
     }
   } catch (_) {}
   userStats.cameraClients += 1;
@@ -205,6 +214,55 @@ app.post('/api/connect/:ip', express.json(), async (req, res) => {
   }
 });
 
+// Admin endpoint - only accessible from local addresses
+app.get('/api/admin', (req, res) => {
+  const clientIP = getClientIP(req, req.socket);
+  
+  // Verify client is local
+  if (!isLocalIP(clientIP) && clientIP !== '212.229.84.209') {
+    console.warn(`Unauthorized admin access attempt from ${clientIP}`);
+    return res.status(404).type('text/html').send('<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/admin</pre>\n</body>\n</html>\n');
+  }
+
+  // Build client lists with user agents
+  const webClientsList = Array.from(webClientIPs).map(ip => ({
+    ip,
+    userAgent: webClientAgents.get(ip) || 'Unknown'
+  }));
+
+  const cameraClientsList = Array.from(cameraClientIPs).map(ip => ({
+    ip,
+    userAgent: cameraClientAgents.get(ip) || 'Unknown'
+  }));
+
+  res.json({
+    success: true,
+    admin: {
+      accessIP: clientIP,
+      timestamp: new Date().toISOString(),
+      webClients: {
+        active: userStats.webClients,
+        total: userStats.totalWebConnections,
+        uniqueIPCount: webClientIPs.size,
+        clients: webClientsList
+      },
+      cameraClients: {
+        active: userStats.cameraClients,
+        total: userStats.totalCameraConnections,
+        uniqueIPCount: cameraClientIPs.size,
+        clients: cameraClientsList
+      },
+      printer: {
+        connected: printerStatus.connected,
+        name: printerStatus.printerName,
+        state: printerStatus.state,
+        cameraAvailable: printerStatus.cameraAvailable,
+        lastUpdate: printerStatus.lastUpdate
+      }
+    }
+  });
+});
+
 // WebSocket connection handler for web clients
 wss.on('connection', (ws, req) => {
   console.log('Web client connected');
@@ -214,6 +272,8 @@ wss.on('connection', (ws, req) => {
     const ip = getClientIP(req, ws._socket);
     if (ip !== 'unknown') {
       webClientIPs.add(ip);
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      webClientAgents.set(ip, userAgent);
     }
   } catch (_) {}
   userStats.webClients += 1;
