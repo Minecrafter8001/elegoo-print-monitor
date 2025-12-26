@@ -12,7 +12,7 @@ const defaultSettings = {
 
 let settings = loadSettings();
 
-// ---------- TIME HELPERS ----------
+// ---------------- TIME HELPERS ----------------
 
 // Format duration in seconds to HH:MM:SS
 function formatDuration(seconds) {
@@ -25,7 +25,7 @@ function formatDuration(seconds) {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-// Format Date to local clock time
+// Format Date to clock time
 function formatClockTime(date) {
     if (!(date instanceof Date) || isNaN(date)) return '-';
     return date.toLocaleTimeString([], {
@@ -36,7 +36,7 @@ function formatClockTime(date) {
     });
 }
 
-// ---------- SETTINGS ----------
+// ---------------- SETTINGS ----------------
 
 function loadSettings() {
     try {
@@ -58,7 +58,7 @@ function saveSettings() {
     }
 }
 
-// ---------- WEBSOCKET ----------
+// ---------------- WEBSOCKET ----------------
 
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -100,15 +100,13 @@ function clearReconnectInterval() {
     }
 }
 
-// ---------- UI UPDATE ----------
+// ---------------- UI UPDATE ----------------
 
 function updateUI(payload) {
     const printer = payload?.printer || {};
     const users = payload?.users || {};
 
-    // Connection status bar
-    const CurrentTimeElement = document.getElementById('currentTime');
-    CurrentTimeElement.textContent = formatClockTime(new Date());
+    // Connection status
     const statusIndicator = document.getElementById('connectionStatus');
     const connectionText = document.getElementById('connectionText');
     const userCountText = document.getElementById('userCount');
@@ -126,9 +124,8 @@ function updateUI(payload) {
 
     // Printer info
     document.getElementById('printerName').textContent = printer.printerName || '-';
-    document.getElementById('currentFile').textContent = printer.currentFile || '-';
 
-    // State
+    // Printer state
     const stateElement = document.getElementById('printerState');
     stateElement.textContent = printer.state || '-';
     stateElement.className = 'value state';
@@ -136,12 +133,14 @@ function updateUI(payload) {
         stateElement.classList.add(printer.state.toLowerCase());
     }
 
-    // Last update (absolute time)
+    document.getElementById('currentFile').textContent = printer.currentFile || '-';
+
+    // Last update (absolute clock time)
     document.getElementById('lastUpdate').textContent =
         printer.lastUpdate ? formatClockTime(new Date(printer.lastUpdate)) : '-';
 
     // Progress
-    const progress = Number((printer.layerProgress || 0).toFixed(2));
+    const progress = Number((printer.layerProgress || 0).toFixed(6));
     document.getElementById('progressFill').style.width = `${progress}%`;
     document.getElementById('progressText').textContent = `${progress.toFixed(2)}%`;
 
@@ -173,20 +172,116 @@ function updateUI(payload) {
     }
 
     // Temperatures
-    const temps = printer.temperatures || {};
-    document.getElementById('nozzleTemp').textContent = Math.round(temps.nozzle?.current || 0);
-    document.getElementById('nozzleTarget').textContent = Math.round(temps.nozzle?.target || 0);
-    document.getElementById('bedTemp').textContent = Math.round(temps.bed?.current || 0);
-    document.getElementById('bedTarget').textContent = Math.round(temps.bed?.target || 0);
-    document.getElementById('enclosureTemp').textContent = Math.round(temps.enclosure?.current || 0);
-    document.getElementById('enclosureTarget').textContent = Math.round(temps.enclosure?.target || 0);
+    const temps = printer.temperatures || { bed: {}, nozzle: {}, enclosure: {} };
+    document.getElementById('nozzleTemp').textContent = Math.round(temps.nozzle.current || 0);
+    document.getElementById('nozzleTarget').textContent = Math.round(temps.nozzle.target || 0);
+    document.getElementById('bedTemp').textContent = Math.round(temps.bed.current || 0);
+    document.getElementById('bedTarget').textContent = Math.round(temps.bed.target || 0);
+    document.getElementById('enclosureTemp').textContent = Math.round(temps.enclosure.current || 0);
+    document.getElementById('enclosureTarget').textContent = Math.round(temps.enclosure.target || 0);
+
+    // ---------------- CAMERA LOGIC (UNCHANGED) ----------------
+
+    const cameraFeed = document.getElementById('cameraFeed');
+    const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+    const cameraOverlay = document.getElementById('cameraOverlay');
 
     lastPrinterState = printer.state?.toLowerCase();
+
+    if (printer.cameraAvailable) {
+        if (printer.state?.toLowerCase() === "idle") {
+            if (settings.pauseOnIdle) {
+                if (!cameraInitialized) {
+                    cameraFeed.src = '/api/camera';
+                    cameraInitialized = true;
+
+                    cameraFeed.onload = function () {
+                        if (!snapshotTaken && printer.state?.toLowerCase() === "idle") {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = cameraFeed.naturalWidth;
+                            canvas.height = cameraFeed.naturalHeight;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(cameraFeed, 0, 0);
+                            cameraFeed.src = canvas.toDataURL('image/jpeg');
+                            snapshotTaken = true;
+                            cameraFeed.onload = null;
+                        }
+                    };
+                }
+
+                cameraFeed.style.display = 'block';
+                cameraPlaceholder.style.display = 'none';
+                cameraOverlay.style.display = 'flex';
+                return;
+            } else {
+                cameraInitialized = true;
+                snapshotTaken = false;
+                cameraFeed.src = '/api/camera';
+                cameraFeed.style.display = 'block';
+                cameraPlaceholder.style.display = 'none';
+                cameraOverlay.style.display = 'none';
+                return;
+            }
+        }
+
+        cameraFeed.src = '/api/camera';
+        cameraInitialized = true;
+        snapshotTaken = false;
+        cameraFeed.style.display = 'block';
+        cameraPlaceholder.style.display = 'none';
+        cameraOverlay.style.display = 'none';
+    } else {
+        cameraFeed.style.display = 'none';
+        cameraPlaceholder.style.display = 'flex';
+    }
 }
 
-// ---------- INIT ----------
+// ---------------- CAMERA TOGGLE ----------------
+
+function toggleCameraStream() {
+    const cameraFeed = document.getElementById('cameraFeed');
+    const cameraOverlay = document.getElementById('cameraOverlay');
+
+    if (lastPrinterState === 'idle' && cameraFeed.style.display === 'block') {
+        if (settings.pauseOnIdle) {
+            if (!snapshotTaken) {
+                const canvas = document.createElement('canvas');
+                canvas.width = cameraFeed.naturalWidth;
+                canvas.height = cameraFeed.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(cameraFeed, 0, 0);
+                cameraFeed.src = canvas.toDataURL('image/jpeg');
+                snapshotTaken = true;
+            }
+            cameraOverlay.style.display = 'flex';
+        } else {
+            snapshotTaken = false;
+            cameraFeed.src = '/api/camera';
+            cameraOverlay.style.display = 'none';
+        }
+    }
+}
+
+// ---------------- INIT ----------------
+
+function initPauseOnIdleButton() {
+    const btn = document.getElementById('pauseOnIdleBtn');
+
+    if (settings.pauseOnIdle) {
+        btn.classList.add('active');
+    }
+
+    btn.addEventListener('click', () => {
+        settings.pauseOnIdle = !settings.pauseOnIdle;
+        saveSettings();
+
+        btn.classList.toggle('active', settings.pauseOnIdle);
+        toggleCameraStream();
+    });
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Elegoo Print Monitor starting...');
+    initPauseOnIdleButton();
     connectWebSocket();
 });
