@@ -641,26 +641,29 @@ async function autoConnect() {
     console.log('Auto-discovering printers...');
     const discovery = new PrinterDiscovery();
     const printers = await discovery.discover(5000);
-    
+
     if (printers.length === 0) {
-      console.log('No printers found on network');
+      console.log('No printers found on network. Retrying in 5 seconds...');
+      setTimeout(autoConnect, 5000);
       return;
     }
 
     const printer = printers[0];
     console.log('Found printer at:', printer.address);
-    
+
     await connectToPrinter(
       printer.address,
       printer.Name || printer.Id || 'Elegoo Printer'
     );
-    
+
     console.log('Connected to printer:', printerStatus.printerName);
-    
+
     // Start camera streaming
     await startCameraStreaming();
   } catch (err) {
     console.error('Auto-connect failed:', err.message);
+    // Retry discovery after 5 seconds on error
+    setTimeout(autoConnect, 5000);
   }
 }
 
