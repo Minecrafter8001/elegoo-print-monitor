@@ -204,17 +204,20 @@ function updateUI(payload) {
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
 
-    lastPrinterState = printer.state?.toLowerCase();
+    // Use mapped state value for all logic
+    lastPrinterState = stateValue;
 
     if (printer.cameraAvailable) {
-        if (printer.state?.toLowerCase() === "idle") {
+        if (stateValue === "Idle") {
             if (settings.pauseOnIdle) {
                 if (!cameraInitialized) {
                     cameraFeed.src = '/api/camera';
                     cameraInitialized = true;
 
                     cameraFeed.onload = function () {
-                        if (!snapshotTaken && printer.state?.toLowerCase() === "idle") {
+                        // Use mapped state for comparison
+                        const mappedState = (typeof printer.state === 'number' || (typeof printer.state === 'string' && /^\d+$/.test(printer.state))) ? stateMap[printer.state] || 'Unknown' : (stateMap[printer.state] || printer.state || 'Unknown');
+                        if (!snapshotTaken && mappedState === "Idle") {
                             const canvas = document.createElement('canvas');
                             canvas.width = cameraFeed.naturalWidth;
                             canvas.height = cameraFeed.naturalHeight;
