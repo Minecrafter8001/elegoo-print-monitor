@@ -6,8 +6,8 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
-const PrinterDiscovery = require('./printer-discovery');
-const SDCPClient = require('./sdcp-client');
+const PrinterDiscovery = require('./utils/printer-discovery');
+const SDCPClient = require('./utils/sdcp-client');
 
 const app = express();
 const server = http.createServer(app);
