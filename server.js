@@ -319,6 +319,41 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+
+// --- Broadcast message to all connected web clients, throttled to once per second ---
+let lastBroadcastTime = 0;
+let pendingBroadcast = null;
+function broadcastToClients(message) {
+  const now = Date.now();
+  const data = JSON.stringify(message);
+  const minInterval = 1000; // 1 second
+
+  if (now - lastBroadcastTime >= minInterval) {
+    // Send immediately
+    webClients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
+      }
+    });
+    lastBroadcastTime = now;
+    pendingBroadcast = null;
+  } else {
+    // Schedule a broadcast if not already scheduled
+    if (!pendingBroadcast) {
+      const delay = minInterval - (now - lastBroadcastTime);
+      pendingBroadcast = setTimeout(() => {
+        webClients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(data);
+          }
+        });
+        lastBroadcastTime = Date.now();
+        pendingBroadcast = null;
+      }, delay);
+    }
+  }
+}
+
 /**
  * Update printer status from SDCP data
  */
@@ -356,12 +391,11 @@ function updatePrinterStatus(data) {
     // Print state from CurrentStatus array
     if (s.CurrentStatus && s.CurrentStatus.length > 0) {
       const status = s.CurrentStatus[0];
-          printerStatus.state = status;
-          if (printerStatus.state === undefined) {
-            console.log('Unknown printer state code:', status);
-          }
+      printerStatus.state = status;
+      if (printerStatus.state === undefined) {
         console.log('Unknown printer state code:', status);
       }
+      // Remove duplicate log
     }
 
     // Print progress
@@ -415,42 +449,6 @@ function updatePrinterStatus(data) {
 
   // Broadcast update to all web clients
   broadcastToClients({ type: 'status', data: buildStatusPayload() });
-
-
-/**
- * Broadcast message to all connected web clients, throttled to once per second
- */
-let lastBroadcastTime = 0;
-let pendingBroadcast = null;
-function broadcastToClients(message) {
-  const now = Date.now();
-  const data = JSON.stringify(message);
-  const minInterval = 1000; // 1 second
-
-  if (now - lastBroadcastTime >= minInterval) {
-    // Send immediately
-    webClients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
-    });
-    lastBroadcastTime = now;
-    pendingBroadcast = null;
-  } else {
-    // Schedule a broadcast if not already scheduled
-    if (!pendingBroadcast) {
-      const delay = minInterval - (now - lastBroadcastTime);
-      pendingBroadcast = setTimeout(() => {
-        webClients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(data);
-          }
-        });
-        lastBroadcastTime = Date.now();
-        pendingBroadcast = null;
-      }, delay);
-    }
-  }
 }
 
 /**
