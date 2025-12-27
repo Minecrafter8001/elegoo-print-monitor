@@ -136,6 +136,7 @@ function updateUI(payload) {
         2: 'Paused',
         3: 'Completed',
         4: 'Error',
+        10: 'Load/uUnload',
         'Disconnected': 'Disconnected',
         'Unknown': 'Unknown'
     };
