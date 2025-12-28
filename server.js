@@ -440,7 +440,7 @@ function updatePrinterStatus(data) {
       const totalLayer = s.PrintInfo.TotalLayer || 0;
       printerStatus.layers = {
         total: totalLayer,
-        finished: currentLayer
+        current: currentLayer
       };
       if (totalLayer > 0) {
         printerStatus.layerProgress = Number(((currentLayer / totalLayer) * 100).toFixed(6));
