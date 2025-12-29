@@ -6,8 +6,23 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
+
 const PrinterDiscovery = require('./utils/printer-discovery');
 const SDCPClient = require('./utils/sdcp-client');
+const {
+  MACHINE_STATUS,
+  MACHINE_STATUS_LABELS,
+  JOB_STATUS,
+  JOB_STATUS_LABELS
+} = require('./utils/status-codes');
+
+// Map status int to label with special rules
+function mapStatusIntToLabel(statusInt) {
+  if ([18, 19, 21].includes(statusInt)) return 'LOADING';
+  if (statusInt === MACHINE_STATUS.PRINTING_RECOVERY) return 'PRINTING';
+  if (MACHINE_STATUS_LABELS[statusInt]) return MACHINE_STATUS_LABELS[statusInt];
+  return null;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -45,7 +60,11 @@ let printerStatus = {
   layers: {
     total: 0,
     finished: 0
-  }
+  },
+  // Single consolidated status
+  status: null, // e.g. 'HOMING' or 'PRINTING'
+  status_code: null,
+  prev_status: null
 };
 
 /**
@@ -383,6 +402,23 @@ function broadcastToClients(message) {
  * Update printer status from SDCP data
  */
 let isFirstUpdate = true;
+
+function parseStatusPayload(data) {
+  // Returns { status, status_code }
+  const statusBlock = data?.Status || {};
+  let currentStatus = statusBlock.CurrentStatus;
+  if (typeof currentStatus === 'number') currentStatus = [currentStatus];
+  let statusCode = Array.isArray(currentStatus) && currentStatus.length ? currentStatus[0] : null;
+  let status = mapStatusIntToLabel(statusCode) || 'UNKNOWN';
+  // If PrintInfo.Status is PRINTING (13), override with PRINTING for user clarity
+  const jobStatusCode = statusBlock.PrintInfo?.Status ?? null;
+  if (jobStatusCode === 13) {
+    status = 'PRINTING';
+    statusCode = 13;
+  }
+  return { status, status_code: statusCode };
+}
+
 function updatePrinterStatus(data) {
   if (!data) {
     // Printer is unreachable or offline
@@ -391,6 +427,10 @@ function updatePrinterStatus(data) {
     printerStatus.cameraAvailable = false;
     printerStatus.lastUpdate = new Date().toISOString();
     printerStatus.customState = 0;
+    printerStatus.machine_status = 'UNKNOWN';
+    printerStatus.job_status = null;
+    printerStatus.machine_status_code = null;
+    printerStatus.job_status_code = null;
     broadcastToClients({ type: 'status', data: buildStatusPayload() });
     return;
   }
@@ -410,52 +450,52 @@ function updatePrinterStatus(data) {
     printerStatus.printerName = data.Attributes.Name || printerStatus.printerName;
   }
 
+
+
+  // Only update status fields if this is a real status payload (not a response/ack)
+  if (data.Status) {
+    // Parse and map consolidated status
+    const { status, status_code } = parseStatusPayload(data);
+
+    // Only update if new value is valid (not null/undefined/UNKNOWN)
+    let new_status = status;
+    let new_status_code = status_code;
+    if (!new_status || new_status === 'UNKNOWN') {
+      new_status = printerStatus.status;
+      new_status_code = printerStatus.status_code;
+    }
+
+    // Track transitions for logging/notifications
+    if (printerStatus.status !== new_status) {
+      console.log(`[Status] Status changed: ${printerStatus.status} -> ${new_status}`);
+      printerStatus.prev_status = printerStatus.status;
+    }
+    printerStatus.status = new_status;
+    printerStatus.status_code = new_status_code;
+
+    // For backward compatibility, keep .state as before
+    printerStatus.state = new_status_code;
+  }
+
   // Handle actual printer status structure
   if (data.Status) {
     const s = data.Status;
-    
-    // Print state from CurrentStatus array
-    if (s.CurrentStatus && s.CurrentStatus.length > 0) {
-      const status = s.CurrentStatus[0];
-      printerStatus.state = status;
-      if (printerStatus.state === undefined) {
-        console.log('Unknown printer state code:', status);
-      }
-      // Remove duplicate log
-    }
-
     // Print progress
     if (s.PrintInfo) {
       // Use printer-reported progress directly
       printerStatus.progress = s.PrintInfo.Progress || 0;
       printerStatus.currentFile = s.PrintInfo.Filename || '';
-      
       // Convert ticks to seconds for time display
       printerStatus.printTime = Math.floor(s.PrintInfo.CurrentTicks || 0);
       const totalTicks = s.PrintInfo.TotalTicks || 0;
       printerStatus.remainingTime = Math.floor(totalTicks - printerStatus.printTime);
-      
-      // Calculate precise progress from current/total layers (6 decimal places)
-      const currentLayer = s.PrintInfo.CurrentLayer || 0;
-      const totalLayer = s.PrintInfo.TotalLayer || 0;
+      // Use printer-reported layer info only
       printerStatus.layers = {
-        total: totalLayer,
-        current: currentLayer
+        total: s.PrintInfo.TotalLayer || 0,
+        current: s.PrintInfo.CurrentLayer || 0
       };
-      if (totalLayer > 0) {
-        printerStatus.layerProgress = Number(((currentLayer / totalLayer) * 100).toFixed(6));
-      } else {
-        printerStatus.layerProgress = 0;
-      }
-      
-      // Calculate ETA based on progress
-      if (printerStatus.progress > 0 && printerStatus.printTime > 0) {
-        const estimatedTotalTime = printerStatus.printTime / (printerStatus.progress / 100);
-        const calculatedRemaining = Math.max(0, Math.floor(estimatedTotalTime - printerStatus.printTime));
-        printerStatus.calculatedTime = calculatedRemaining;
-      }
+      // Manual progress calculations removed; only using printer-reported progress and remainingTime
     }
-
     // Temperatures - using actual field names from printer
     if (s.TempOfHotbed !== undefined) {
       printerStatus.temperatures.bed.current = Math.round(s.TempOfHotbed);
@@ -662,36 +702,74 @@ function stopCameraStreaming() {
   printerStream = null;
 }
 
+
 /**
- * Auto-discover and connect to first printer
+ * Auto-discover and connect to printers, retrying each up to 3 times before moving to the next
  */
+let autoConnectState = {
+  printers: [],
+  currentIdx: 0,
+  failCount: 0
+};
+
 async function autoConnect() {
   try {
-    console.log('Auto-discovering printers...');
-    const discovery = new PrinterDiscovery();
-    const printers = await discovery.discover(5000);
+    // If no printers list or exhausted, rediscover
+    if (!autoConnectState.printers.length || autoConnectState.currentIdx >= autoConnectState.printers.length) {
+      console.log('Auto-discovering printers...');
+      const discovery = new PrinterDiscovery();
+      let printers = await discovery.discover(5000);
+      // Filter out proxy servers
+      printers = printers.filter(p => {
+        // Proxy flag may be in Data.Attributes.Proxy or Attributes.Proxy
+        const proxy = (p.Data && p.Data.Attributes && p.Data.Attributes.Proxy) || (p.Attributes && p.Attributes.Proxy);
+        return !proxy;
+      });
+      if (printers.length === 0) {
+        console.log('No eligible printers found on network. Retrying in 5 seconds...');
+        autoConnectState = { printers: [], currentIdx: 0, failCount: 0 };
+        setTimeout(autoConnect, 5000);
+        return;
+      }
+      autoConnectState.printers = printers;
+      autoConnectState.currentIdx = 0;
+      autoConnectState.failCount = 0;
+    }
 
-    if (printers.length === 0) {
-      console.log('No printers found on network. Retrying in 5 seconds...');
+    const printer = autoConnectState.printers[autoConnectState.currentIdx];
+    console.log(`Trying to connect to printer ${autoConnectState.currentIdx + 1}/${autoConnectState.printers.length} at:`, printer.address);
+
+    try {
+      await connectToPrinter(
+        printer.address,
+        printer.Name || printer.Id || 'Elegoo Printer'
+      );
+      console.log('Connected to printer:', printerStatus.printerName);
+      // Start camera streaming
+      await startCameraStreaming();
+      // Reset fail count on success
+      autoConnectState.failCount = 0;
+    } catch (err) {
+      autoConnectState.failCount++;
+      console.error(`Auto-connect failed (${autoConnectState.failCount}/3) for ${printer.address}:`, err.message);
+      if (autoConnectState.failCount >= 3) {
+        // Move to next printer
+        autoConnectState.currentIdx++;
+        autoConnectState.failCount = 0;
+        if (autoConnectState.currentIdx >= autoConnectState.printers.length) {
+          // All tried, rediscover after delay
+          console.log('All printers failed, rediscovering in 5 seconds...');
+          autoConnectState = { printers: [], currentIdx: 0, failCount: 0 };
+          setTimeout(autoConnect, 5000);
+          return;
+        }
+      }
+      // Try again after delay (either retry or next printer)
       setTimeout(autoConnect, 5000);
       return;
     }
-
-    const printer = printers[0];
-    console.log('Found printer at:', printer.address);
-
-    await connectToPrinter(
-      printer.address,
-      printer.Name || printer.Id || 'Elegoo Printer'
-    );
-
-    console.log('Connected to printer:', printerStatus.printerName);
-
-    // Start camera streaming
-    await startCameraStreaming();
   } catch (err) {
-    console.error('Auto-connect failed:', err.message);
-    // Retry discovery after 5 seconds on error
+    console.error('Auto-connect error:', err.message);
     setTimeout(autoConnect, 5000);
   }
 }

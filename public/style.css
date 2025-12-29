@@ -146,30 +146,16 @@ header h1 {
 .value.state {
     padding: 5px 15px;
     border-radius: 20px;
-    background: #95a5a6;
-    color: white;
+    background: #888; /* fallback, will be overridden by JS */
+    color: #fff;      /* fallback, will be overridden by JS */
     font-size: 0.9em;
+    transition: background 0.3s, color 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
 }
 
-.value.state.printing {
-    background: #3498db;
-}
-
-.value.state.idle {
-    background: #2ecc71;
-}
-
-.value.state.paused {
-    background: #f39c12;
-}
-
-.value.state.completed {
-    background: #27ae60;
-}
-
-.value.state.error {
-    background: #e74c3c;
-}
 
 .progress-container {
     margin-bottom: 20px;

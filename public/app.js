@@ -129,41 +129,42 @@ function updateUI(payload) {
     // Printer info
     document.getElementById('printerName').textContent = printer.printerName || '-';
 
-    // Printer state
-    
-    const stateMap = {
-        0: 'Idle',
-        1: 'Printing',
-        2: 'Paused',
-        3: 'Completed',
-        4: 'Error',
-        10: 'Load/Unload',
-        'Disconnected': 'Disconnected',
-        'Unknown': 'Unknown'
-    
+
+
+    // --- Status background color map ---
+    const STATUS_BG = {
+        IDLE: '#444',
+        PRINTING: '#3498db',
+        FILE_TRANSFERRING: '#888',
+        LEVELING: '#20b2aa',
+        STOPPING: '#e67e22',
+        STOPPED: '#e74c3c',
+        HOMING: '#3498db',
+        RECOVERY: '#f39c12',
+        PREHEATING: '#ff9800',
+        PAUSED: '#e67e22',
+        PAUSING: '#e67e22',
+        COMPLETE: '#27ae60',
+        ERROR: '#e74c3c',
+        DROPPING: '#888',
+        LIFTING: '#888',
+        LOADING: '#888',
+        FILE_CHECKING: '#888',
+        UNKNOWN: '#888',
     };
-    const customStateMap = {
-        1: 'PreStart',
-    };
-    // Use customState if present and not 0
-    let stateValue;
-    if (printer.customState && printer.customState !== 0) {
-        // Map using customStateMap
-        stateValue = customStateMap[printer.customState] || 'Unknown';
-    } else {
-        stateValue = printer.state;
-        if (typeof stateValue === 'number' || (typeof stateValue === 'string' && /^\d+$/.test(stateValue))) {
-            stateValue = stateMap[stateValue] || 'Unknown';
-        } else if (typeof stateValue === 'string' && stateMap[stateValue]) {
-            stateValue = stateMap[stateValue];
-        }
+    function getStatusBg(status) {
+        return STATUS_BG[status] || STATUS_BG.UNKNOWN;
     }
+
+    // --- Display single status with white text and colored background ---
+    const status = printer.status || 'UNKNOWN';
     const stateElement = document.getElementById('printerState');
-    stateElement.textContent = stateValue || '-';
+    stateElement.textContent = status;
     stateElement.className = 'value state';
-    if (stateValue) {
-        stateElement.classList.add(stateValue.toLowerCase());
-    }
+    stateElement.style.background = getStatusBg(status);
+    stateElement.style.color = '#fff';
+
+
 
     document.getElementById('currentFile').textContent = printer.currentFile || '-';
 
@@ -172,7 +173,9 @@ function updateUI(payload) {
         printer.lastUpdate ? formatClockTime(new Date(printer.lastUpdate)) : '-';
 
     // Progress
-    const progress = Number((printer.layerProgress || 0).toFixed(6));
+
+    // Use new progress field if available, fallback to old
+    const progress = Number((printer.progress || printer.Progress || 0).toFixed(6));
     document.getElementById('progressFill').style.width = `${progress}%`;
     document.getElementById('progressText').textContent = `${progress.toFixed(2)}%`;
 
@@ -183,23 +186,20 @@ function updateUI(payload) {
     document.getElementById('remainingTime').textContent =
         formatDuration(printer.remainingTime);
 
-    document.getElementById('calculatedTime').textContent =
-        formatDuration(printer.calculatedTime);
+    // Layer info
+    const layers = printer.layers || { current: 0, total: 0 };
+    const completedLayers = layers.current || 0;
+    const totalLayers = layers.total || 0;
+    const remainingLayers = totalLayers > 0 ? Math.max(0, totalLayers - completedLayers) : 0;
 
+    const completedLayersElem = document.getElementById('completedLayers');
+    if (completedLayersElem) completedLayersElem.textContent = completedLayers;
 
-    if (printer.remainingTime > 0 && printer.state !== 'idle') {
-        document.getElementById('ReportedETA').textContent =
-            formatClockTime(new Date(now.getTime() + printer.remainingTime * 1000));
-    } else {
-        document.getElementById('ReportedETA').textContent = '-';
-    }
+    const totalLayersElem = document.getElementById('totalLayers');
+    if (totalLayersElem) totalLayersElem.textContent = totalLayers;
 
-    if (printer.calculatedTime > 0 && printer.state !== 'idle') {
-        document.getElementById('CalculatedETA').textContent =
-            formatClockTime(new Date(now.getTime() + printer.calculatedTime * 1000));
-    } else {
-        document.getElementById('CalculatedETA').textContent = '-';
-    }
+    const remainingLayersElem = document.getElementById('remainingLayers');
+    if (remainingLayersElem) remainingLayersElem.textContent = remainingLayers;
 
     // Temperatures
     const temps = printer.temperatures || { bed: {}, nozzle: {}, enclosure: {} };
@@ -217,10 +217,10 @@ function updateUI(payload) {
     const cameraOverlay = document.getElementById('cameraOverlay');
 
     // Use mapped state value for all logic
-    lastPrinterState = stateValue;
+    lastPrinterState = status;
 
     if (printer.cameraAvailable) {
-        if (stateValue === "Idle") {
+        if (status === "IDLE") {
             if (settings.pauseOnIdle) {
                 if (!cameraInitialized) {
                     cameraFeed.src = '/api/camera';
@@ -229,7 +229,7 @@ function updateUI(payload) {
                     cameraFeed.onload = function () {
                         // Use mapped state for comparison
                         const mappedState = (typeof printer.state === 'number' || (typeof printer.state === 'string' && /^\d+$/.test(printer.state))) ? stateMap[printer.state] || 'Unknown' : (stateMap[printer.state] || printer.state || 'Unknown');
-                        if (!snapshotTaken && mappedState === "Idle") {
+                        if (!snapshotTaken && mappedState === "IDLE") {
                             const canvas = document.createElement('canvas');
                             canvas.width = cameraFeed.naturalWidth;
                             canvas.height = cameraFeed.naturalHeight;
