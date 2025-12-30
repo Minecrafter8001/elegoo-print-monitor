@@ -39,7 +39,7 @@ const CAMERA_ACK_ERRORS = {
 
 // Store printer data
 let printerClient = null;
-let printerStatus = {
+let defaultPrinterStatus = {
   connected: false,
   printerName: 'Unknown',
   state: 'Disconnected',
@@ -66,7 +66,7 @@ let printerStatus = {
   status_code: null,
   prev_status: null
 };
-
+let printerStatus = defaultPrinterStatus;
 /**
  * Set custom status codes based on printer info
  * @param {object} info - Raw printer info/status
@@ -562,9 +562,28 @@ async function connectToPrinter(printerIP, printerName = null) {
     printerClient.disconnect();
   }
 
+
   // Create new connection
   printerClient = new SDCPClient(printerIP);
   printerClient.onStatus(updatePrinterStatus);
+
+  // Listen for disconnect/error events from SDCP client
+  if (typeof printerClient.on === 'function') {
+    printerClient.on('disconnect', () => {
+      printerStatus.connected = false;
+      printerStatus.state = 'Disconnected';
+      printerStatus.cameraAvailable = false;
+      printerStatus.lastUpdate = new Date().toISOString();
+      broadcastToClients({ type: 'status', data: buildStatusPayload() });
+    });
+    printerClient.on('error', () => {
+      printerStatus.connected = false;
+      printerStatus.state = 'Disconnected';
+      printerStatus.cameraAvailable = false;
+      printerStatus.lastUpdate = new Date().toISOString();
+      broadcastToClients({ type: 'status', data: buildStatusPayload() });
+    });
+  }
 
   // Try to connect and handle errors
   try {
@@ -572,6 +591,8 @@ async function connectToPrinter(printerIP, printerName = null) {
     printerClient.startStatusPolling(STATUS_POLL_INTERVAL);
     // Setup camera
     await setupCameraURL();
+    // Always (re)start camera streaming after connecting
+    await startCameraStreaming();
     // Update status
     printerStatus.connected = true;
     if (printerName) {
