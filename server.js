@@ -197,16 +197,23 @@ app.get('/api/camera/h264', (req, res) => {
     return res.status(503).json({ success: false, error: 'Camera stream not available' });
   }
   let transcoder;
+  let firstChunk = false;
   try {
-    transcoder = startH264Transcode(cameraStreamURL);
+    transcoder = startH264Transcode(cameraStreamURL, (msg) => {
+      console.warn('[H264] ffmpeg:', msg.trim());
+    });
   } catch (err) {
     console.error('Failed to start h264 transcoder:', err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 
   res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Transfer-Encoding', 'chunked');
 
+  transcoder.stdout.on('data', () => {
+    firstChunk = true;
+  });
   transcoder.stdout.pipe(res);
 
   const abort = () => {
@@ -230,6 +237,13 @@ app.get('/api/camera/h264', (req, res) => {
   req.on('error', abort);
   res.on('close', abort);
   res.on('error', abort);
+
+  transcoder.on('close', (code) => {
+    if (!firstChunk && !res.headersSent) {
+      res.status(502).json({ success: false, error: 'Transcode failed to start' });
+    }
+    abort();
+  });
 });
 
 // API endpoint to connect to a specific printer
