@@ -1,6 +1,7 @@
 const { parseStatusPayload, mapStatusIntToLabel } = require('../src/status-utils');
-const { MACHINE_STATUS } = require('../utils/status-codes');
+const { MACHINE_STATUS, JOB_STATUS } = require('../utils/status-codes');
 const PRINTING_RECOVERY = MACHINE_STATUS.PRINTING_RECOVERY;
+const JOB_PRINTING_RECOVERY = JOB_STATUS.PRINTING_RECOVERY;
 
 describe('status-utils', () => {
   describe('mapStatusIntToLabel', () => {
@@ -59,10 +60,10 @@ describe('status-utils', () => {
         payload: {
           Status: {
             CurrentStatus: [0],
-            PrintInfo: { Status: PRINTING_RECOVERY, Progress: 50 }
+            PrintInfo: { Status: JOB_PRINTING_RECOVERY, Progress: 50 }
           }
         },
-        expect: { status: 'PRINTING', status_code: PRINTING_RECOVERY }
+        expect: { status: 'PRINTING', status_code: JOB_PRINTING_RECOVERY }
       }
     ];
 
