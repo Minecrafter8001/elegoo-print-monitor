@@ -278,11 +278,12 @@ function updateUI(payload) {
         const isIdle = status === 'IDLE';
         if (preferH264) {
             // Use H.264 <video>
-            if (!cameraInitialized || h264Video.src !== '/api/camera/h264') {
+            if (!cameraInitialized || h264Video.src !== 'http://localhost:3000/api/camera/h264') {
                 h264Video.src = '/api/camera/h264';
                 h264Video.style.display = 'block';
                 cameraFeed.style.display = 'none';
-                h264Video.play().catch(() => {});
+                h264Video.load();
+                h264Video.play().catch(e => console.warn('H264 play failed:', e));
                 cameraInitialized = true;
             }
             if (isIdle && settings.pauseOnIdle) {
