@@ -22,6 +22,7 @@ function startH264Transcode(sourceUrl, onStderr) {
     '-use_wallclock_as_timestamps', '1',
     '-f', 'mjpeg',
     '-i', sourceUrl,
+    '-bsf:v', 'mjpeg2jpeg',
     '-an',
     '-c:v', 'libx264',
     '-preset', 'veryfast',

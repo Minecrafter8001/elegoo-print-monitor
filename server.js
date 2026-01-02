@@ -198,6 +198,7 @@ app.get('/api/camera/h264', (req, res) => {
   }
   let transcoder;
   let firstChunk = false;
+  let watchdog;
   try {
     transcoder = startH264Transcode(cameraStreamURL, (msg) => {
       console.warn('[H264] ffmpeg:', msg.trim());
@@ -213,13 +214,32 @@ app.get('/api/camera/h264', (req, res) => {
 
   transcoder.stdout.on('data', () => {
     firstChunk = true;
+    if (watchdog) {
+      clearTimeout(watchdog);
+      watchdog = null;
+    }
   });
   transcoder.stdout.pipe(res);
+
+  watchdog = setTimeout(() => {
+    if (!firstChunk) {
+      abort();
+      if (!res.headersSent) {
+        res.status(502).json({ success: false, error: 'Transcode produced no data' });
+      } else {
+        res.end();
+      }
+    }
+  }, 5000);
 
   const abort = () => {
     if (transcoder) {
       transcoder.kill('SIGINT');
       transcoder = null;
+    }
+    if (watchdog) {
+      clearTimeout(watchdog);
+      watchdog = null;
     }
   };
 
