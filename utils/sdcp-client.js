@@ -18,6 +18,7 @@ class SDCPClient extends EventEmitter {
     this.messageHandlers = new Map();
     this.statusCallback = null;
     this.reconnectInterval = null;
+    this.statusFailureCount = 0;
   }
 
   /**
@@ -128,7 +129,7 @@ class SDCPClient extends EventEmitter {
    */
   sendCommand(cmd, data = {}) {
     return new Promise((resolve, reject) => {
-      if (!this.connected) {
+      if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error('Not connected to printer'));
         return;
       }
@@ -181,9 +182,18 @@ class SDCPClient extends EventEmitter {
       if (this.statusCallback && response) {
         this.statusCallback(response);
       }
+      this.statusFailureCount = 0;
       return response;
     } catch (err) {
       console.error('Failed to request status:', err.message);
+      this.statusFailureCount += 1;
+      if (this.statusFailureCount >= 3) {
+        this.statusFailureCount = 0;
+        // Treat repeated failures as lost connection
+        this.disconnect();
+        this.emit('disconnect');
+        this.scheduleReconnect();
+      }
       return null;
     }
   }
