@@ -81,6 +81,7 @@ class SDCPClient extends EventEmitter {
         this.reconnectInterval = null;
         // Only start polling after successful reconnect
         this.startStatusPolling();
+        this.emit('reconnected');
       } catch (err) {
         console.error('Reconnection failed:', err.message);
       }
