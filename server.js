@@ -68,6 +68,8 @@ let defaultPrinterStatus = {
   prev_status: null
 };
 let printerStatus = { ...defaultPrinterStatus };
+let reconnectSetupInProgress = false;
+let reconnectSetupNeeded = false;
 /**
  * Set custom status codes based on printer info
  * @param {object} info - Raw printer info/status
@@ -171,6 +173,7 @@ function setDisconnectedStatus() {
     printerStatus.printerName === 'Unknown' &&
     printerStatus.state === 'Disconnected'
   ) return;
+  reconnectSetupNeeded = true;
   printerStatus = {
     ...defaultPrinterStatus,
     lastUpdate: new Date().toISOString()
@@ -437,13 +440,9 @@ function parseStatusPayload(data) {
 }
 
 function updatePrinterStatus(data) {
-  // Prevent status update if already disconnected
-  if (printerStatus.connected === false) {
-    setDisconnectedStatus();
-    return;
-  }
   if (!data) {
     // Printer is unreachable or offline
+    reconnectSetupNeeded = true;
     printerStatus.connected = false;
     printerStatus.state = 'Disconnected';
     printerStatus.cameraAvailable = false;
@@ -455,6 +454,14 @@ function updatePrinterStatus(data) {
     printerStatus.job_status_code = null;
     broadcastToClients({ type: 'status', data: buildStatusPayload() });
     return;
+  }
+
+  // If we receive data after a disconnect, treat this as a reconnection
+  if (!printerStatus.connected) {
+    const reconnectName = data.Attributes?.Name || printerStatus.printerName;
+    ensureReconnectSetup(reconnectName).catch((err) => {
+      console.error('Failed to refresh printer state after reconnection:', err.message);
+    });
   }
 
   // Log first status update for debugging
@@ -574,6 +581,37 @@ async function setupCameraURL() {
 }
 
 /**
+ * Handle tasks that should run after a successful connection/reconnection:
+ * - mark the printer as connected and update its name (if provided)
+ * - refresh camera availability and restart streaming
+ * - broadcast the latest status to all web clients
+ */
+async function onPrinterConnected(printerName = null) {
+  printerStatus.connected = true;
+  if (printerName) {
+    printerStatus.printerName = printerName;
+  }
+  // Refresh camera availability on each (re)connect
+  await setupCameraURL();
+  await startCameraStreaming();
+  broadcastToClients({ type: 'status', data: buildStatusPayload() });
+}
+
+async function ensureReconnectSetup(printerName = null) {
+  if (reconnectSetupInProgress) return;
+  reconnectSetupInProgress = true;
+  try {
+    await onPrinterConnected(printerName);
+    reconnectSetupNeeded = false;
+  } catch (err) {
+    reconnectSetupNeeded = true;
+    throw err;
+  } finally {
+    reconnectSetupInProgress = false;
+  }
+}
+
+/**
  * Connect to a printer at the given IP address
  */
 async function connectToPrinter(printerIP, printerName = null) {
@@ -588,33 +626,23 @@ async function connectToPrinter(printerIP, printerName = null) {
   printerClient.onStatus(updatePrinterStatus);
 
   // Listen for disconnect/error events from SDCP client
-  if (typeof printerClient.on === 'function') {
-    printerClient.on('disconnect', () => {
-      setDisconnectedStatus();
-      // Immediately broadcast status to all clients after disconnect
-      broadcastToClients({ type: 'status', data: buildStatusPayload() });
+  const handlePrinterLost = () => {
+    setDisconnectedStatus();
+  };
+  printerClient.on('disconnect', handlePrinterLost);
+  printerClient.on('error', handlePrinterLost);
+  printerClient.on('reconnected', () => {
+    if (!reconnectSetupNeeded) return;
+    ensureReconnectSetup(printerName).catch((err) => {
+      console.error('Failed to refresh printer state after reconnection:', err.message);
     });
-    printerClient.on('error', () => {
-      setDisconnectedStatus();
-      broadcastToClients({ type: 'status', data: buildStatusPayload() });
-    });
-  }
+  });
 
   // Try to connect and handle errors
   try {
     await printerClient.connect();
     printerClient.startStatusPolling(STATUS_POLL_INTERVAL);
-    // Setup camera
-    await setupCameraURL();
-    // Always (re)start camera streaming after connecting
-    await startCameraStreaming();
-    // Update status
-    printerStatus.connected = true;
-    if (printerName) {
-      printerStatus.printerName = printerName;
-    }
-    // Immediately broadcast status to all clients after reconnect
-    broadcastToClients({ type: 'status', data: buildStatusPayload() });
+    await ensureReconnectSetup(printerName);
   } catch (err) {
     // Printer is offline or unreachable: fully reset status and broadcast
     printerStatus = {
