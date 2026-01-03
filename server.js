@@ -384,10 +384,10 @@ function updatePrinterStatus(data) {
     }
     
     printerStatus.status = status;
-    printerStatus.status_code = new_status_code;
+    printerStatus.status_code = status_code;
 
     // For backward compatibility, keep .state as before
-    printerStatus.state = new_status_code;
+    printerStatus.state = status_code;
   }
 
   // Handle actual printer status structure

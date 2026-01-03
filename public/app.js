@@ -187,9 +187,10 @@ function updateUI(payload) {
     // Progress
 
     // Use new progress field if available, fallback to old
-    const progress = Number((printer.progress || printer.Progress || 0).toFixed(6));
-    document.getElementById('progressFill').style.width = `${progress}%`;
-    document.getElementById('progressText').textContent = `${progress.toFixed(2)}%`;
+    const progress = printer.progress || printer.Progress || 0;
+    
+    document.getElementById('progressFill').style.width = `${progress.toFixed(0)}%`;
+    document.getElementById('progressText').textContent = `${progress.toFixed(0)}%`;
 
     // Durations
     document.getElementById('printTime').textContent =

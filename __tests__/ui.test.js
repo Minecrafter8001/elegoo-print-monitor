@@ -120,7 +120,7 @@ describe('UI and Client Tests', () => {
         expect(document.getElementById('machineState').textContent).toBe('PRINTING');
         expect(document.getElementById('jobState').textContent).toBe('PRINTING');
         expect(document.getElementById('currentFile').textContent).toBe('test.gcode');
-        expect(document.getElementById('progressText').textContent).toBe('50.50%');
+        expect(document.getElementById('progressText').textContent).toBe('51%');
         expect(document.getElementById('nozzleTemp').textContent).toBe('200');
         expect(document.getElementById('nozzleTarget').textContent).toBe('210');
         expect(document.getElementById('completedLayers').textContent).toBe('10');
