@@ -160,13 +160,21 @@ function updateUI(payload) {
         return STATUS_BG[status] || STATUS_BG.UNKNOWN;
     }
 
-    // --- Display single status with white text and colored background ---
-    const status = printer.status || 'UNKNOWN';
-    const stateElement = document.getElementById('printerState');
-    stateElement.textContent = status;
-    stateElement.className = 'value state';
-    stateElement.style.background = getStatusBg(status);
-    stateElement.style.color = '#fff';
+    // --- Display machine state ---
+    const machineState = printer.status?.machine?.state || 'UNKNOWN';
+    const machineStateElement = document.getElementById('machineState');
+    machineStateElement.textContent = machineState;
+    machineStateElement.className = 'value state';
+    machineStateElement.style.background = getStatusBg(machineState);
+    machineStateElement.style.color = '#fff';
+
+    // --- Display job state ---
+    const jobState = printer.status?.job?.state || 'UNKNOWN';
+    const jobStateElement = document.getElementById('jobState');
+    jobStateElement.textContent = jobState;
+    jobStateElement.className = 'value state';
+    jobStateElement.style.background = getStatusBg(jobState);
+    jobStateElement.style.color = '#fff';
 
 
 
@@ -190,10 +198,11 @@ function updateUI(payload) {
     document.getElementById('remainingTime').textContent =
         formatDuration(printer.remainingTime);
 
-    // ETA freeze logic
-    // Freeze ETA when progress is 100 and state is NOT PRINTING; unfreeze when state is PRINTING
+    // ETA freeze logic based on job and machine state
+    // Freeze ETA when progress is 100 and neither is PRINTING; unfreeze when either is PRINTING
     const etaElem = document.getElementById('ReportedETA');
-    const statusUpper = (printer.status || '').toUpperCase();
+    const machineStateUpper = (machineState || '').toUpperCase();
+    const jobStateUpper = (jobState || '').toUpperCase();
 
     // Helper to get stable ETA based on last update time
     const getStableETA = () => {
@@ -204,8 +213,8 @@ function updateUI(payload) {
         return '-';
     };
 
-    if (statusUpper === 'PRINTING') {
-        // Unfreeze ETA when printing
+    if (machineStateUpper === 'PRINTING' || jobStateUpper === 'PRINTING') {
+        // Unfreeze ETA when either is printing
         etaElem.textContent = getStableETA();
         frozenETA = null;
         frozenETAState = null;
@@ -213,7 +222,7 @@ function updateUI(payload) {
         if (!frozenETA) {
             // Only freeze if not already frozen
             frozenETA = getStableETA();
-            frozenETAState = statusUpper;
+            frozenETAState = jobStateUpper || machineStateUpper;
         }
         etaElem.textContent = frozenETA;
     } else if (frozenETA) {
@@ -256,11 +265,11 @@ function updateUI(payload) {
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
 
-    // Use mapped state value for all logic
-    lastPrinterState = status;
+    // Use job state for camera idle detection - check if either machine or job is idle
+    lastPrinterState = jobState;
 
     if (printer.cameraAvailable) {
-        const isIdle = status === "IDLE";
+        const isIdle = jobState === "IDLE" || machineState === "IDLE";
         if (!cameraInitialized) {
             cameraFeed.src = '/api/camera';
             cameraInitialized = true;

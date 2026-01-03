@@ -97,7 +97,11 @@ describe('UI and Client Tests', () => {
             printer: {
                 connected: true,
                 printerName: 'Test Printer',
-                status: 'PRINTING',
+                status: {
+                    consolidated: 'PRINTING',
+                    machine: { state: 'PRINTING', code: 1 },
+                    job: { state: 'PRINTING', code: 3 }
+                },
                 currentFile: 'test.gcode',
                 progress: 50.5,
                 printTime: 100,
@@ -113,7 +117,8 @@ describe('UI and Client Tests', () => {
         updateUI(payload);
 
         expect(document.getElementById('printerName').textContent).toBe('Test Printer');
-        expect(document.getElementById('printerState').textContent).toBe('PRINTING');
+        expect(document.getElementById('machineState').textContent).toBe('PRINTING');
+        expect(document.getElementById('jobState').textContent).toBe('PRINTING');
         expect(document.getElementById('currentFile').textContent).toBe('test.gcode');
         expect(document.getElementById('progressText').textContent).toBe('50.50%');
         expect(document.getElementById('nozzleTemp').textContent).toBe('200');
@@ -178,7 +183,11 @@ describe('UI and Client Tests', () => {
             printer: {
                 connected: true,
                 cameraAvailable: true,
-                status: 'PRINTING'
+                status: {
+                    consolidated: 'PRINTING',
+                    machine: { state: 'PRINTING', code: 1 },
+                    job: { state: 'PRINTING', code: 3 }
+                }
             }
         };
         
@@ -189,7 +198,11 @@ describe('UI and Client Tests', () => {
         
         // If it becomes IDLE and pauseOnIdle is true
         settings.pauseOnIdle = true;
-        payload.printer.status = 'IDLE';
+        payload.printer.status = {
+            consolidated: 'IDLE',
+            machine: { state: 'IDLE', code: 0 },
+            job: { state: 'IDLE', code: 0 }
+        };
         updateUI(payload);
         expect(document.getElementById('cameraOverlay').style.display).toBe('flex');
     });

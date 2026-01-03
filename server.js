@@ -53,8 +53,12 @@ let defaultPrinterStatus = {
     total: 0,
     finished: 0
   },
-  // Single consolidated status
-  status: null, // e.g. 'HOMING' or 'PRINTING'
+  // Status object containing machine and job states
+  status: {
+    consolidated: 'UNKNOWN',
+    machine: { state: 'UNKNOWN', code: null },
+    job: { state: 'UNKNOWN', code: null }
+  },
   status_code: null,
   prev_status: null
 };
@@ -358,23 +362,28 @@ function updatePrinterStatus(data) {
 
   // Only update status fields if this is a real status payload (not a response/ack)
   if (data.Status) {
-    // Parse and map consolidated status
-    const { status, status_code } = parseStatusPayload(data);
+    // Parse and map separated states and consolidated status
+    const { 
+      status,
+      status_code
+    } = parseStatusPayload(data);
 
+    // Update status object with new values
+    const new_consolidated = status.consolidated;
+    let use_new_status = new_consolidated;
+    
     // Only update if new value is valid (not null/undefined/UNKNOWN)
-    let new_status = status;
-    let new_status_code = status_code;
-    if (!new_status || new_status === 'UNKNOWN') {
-      new_status = printerStatus.status;
-      new_status_code = printerStatus.status_code;
+    if (!new_consolidated || new_consolidated === 'UNKNOWN') {
+      use_new_status = printerStatus.status.consolidated;
     }
 
     // Track transitions for logging/notifications
-    if (printerStatus.status !== new_status) {
-      console.log(`[Status] Status changed: ${printerStatus.status} -> ${new_status}`);
-      printerStatus.prev_status = printerStatus.status;
+    if (printerStatus.status.consolidated !== use_new_status) {
+      console.log(`[Status] Status changed: ${printerStatus.status.consolidated} -> ${use_new_status}`);
+      printerStatus.prev_status = printerStatus.status.consolidated;
     }
-    printerStatus.status = new_status;
+    
+    printerStatus.status = status;
     printerStatus.status_code = new_status_code;
 
     // For backward compatibility, keep .state as before

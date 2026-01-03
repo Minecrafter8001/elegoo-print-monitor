@@ -70,7 +70,8 @@ describe('status-utils', () => {
     cases.forEach(({ name, payload, expect: expected }) => {
       test(name, () => {
         const result = parseStatusPayload(payload);
-        expect(result.status).toBe(expected.status);
+        // Check the consolidated status
+        expect(result.status.consolidated).toBe(expected.status);
         expect(result.status_code).toBe(expected.status_code);
       });
     });
