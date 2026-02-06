@@ -12,7 +12,8 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3001,
         DEBUG_DISABLE_LOCAL_IP_FILTER: 'false',
-        ENABLE_DEBUG_ENDPOINTS: 'false'
+        ENABLE_DEBUG_ENDPOINTS: 'false',
+        WS_UPDATE_INTERVAL: 250
       }
     }
   ]

@@ -24,6 +24,10 @@ const wss = new WebSocket.Server({ server });
 const MAX_FPS = 15;
 const PORT = process.env.PORT || 3000;
 const STATUS_POLL_INTERVAL = 2000;
+const WS_UPDATE_INTERVAL = (() => {
+  const value = Number.parseInt(process.env.WS_UPDATE_INTERVAL, 10);
+  return Number.isFinite(value) && value > 0 ? value : 1000;
+})();
 const CAMERA_MAX_START_FAILURES = 3;
 const CAMERA_ACK_ERRORS = {
   1: 'Exceeded maximum simultaneous streaming limit',
@@ -326,7 +330,7 @@ let pendingBroadcast = null;
 function broadcastToClients(message) {
   const now = Date.now();
   const data = JSON.stringify(message);
-  const minInterval = 1000; // 1 second
+  const minInterval = WS_UPDATE_INTERVAL; // milliseconds between broadcasts
 
   // High-priority messages bypass throttling
   if (message?.type === 'server_restarting') {
