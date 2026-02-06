@@ -383,6 +383,83 @@ footer {
     border: 1px solid #0f3460;
 }
 
+.toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 999;
+}
+
+.toast-card {
+    background: #0f3460;
+    border: 2px solid #00d4ff;
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.4);
+    color: #e0e0e0;
+    width: 280px;
+    max-width: 90vw;
+    position: relative;
+    transform: translateX(120%);
+    opacity: 0;
+    animation: toast-in 280ms ease-out forwards;
+}
+
+.toast-title {
+    font-weight: 700;
+    color: #00d4ff;
+    margin-bottom: 6px;
+    padding-right: 18px;
+}
+
+.toast-body {
+    font-size: 0.95em;
+    margin-bottom: 4px;
+}
+
+.toast-hint {
+    font-size: 0.85em;
+    color: #a0a0a0;
+}
+
+.toast-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    cursor: pointer;
+    color: #a0a0a0;
+    font-weight: 700;
+}
+
+@keyframes toast-in {
+    from {
+        transform: translateX(120%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes toast-out {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(120%);
+        opacity: 0;
+    }
+}
+
+.hidden {
+    display: none;
+}
+
 /* Responsive design */
 @media (max-width: 1200px) {
     .main-grid {

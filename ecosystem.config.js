@@ -11,7 +11,8 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3001,
-        DEBUG_DISABLE_LOCAL_IP_FILTER: 'false'
+        DEBUG_DISABLE_LOCAL_IP_FILTER: 'false',
+        ENABLE_DEBUG_ENDPOINTS: 'false'
       }
     }
   ]

@@ -1,51 +1,18 @@
-# Copilot Instructions for Elegoo Print Monitor
+# AI Coding Guide
 
-## Project Overview
-- **Purpose:** Real-time monitoring of Elegoo 3D printers (Centauri Carbon and others using SDCP) via a Node.js web server.
-- **Architecture:**
-  - `server.js`: Main Express server, handles HTTP API and WebSocket proxying to printers.
-  - `utils/printer-discovery.js`: Discovers printers on the LAN using UDP broadcast (port 3000, message "M99999").
-  - `utils/sdcp-client.js`: Implements SDCP protocol over WebSocket (`ws://PRINTER_IP:3030/websocket`).
-  - `public/`: Web UI (HTML, CSS, JS) for live status and camera feed.
-  - `utils/websocket-tester.js`: CLI tool for manual SDCP/WebSocket testing.
+- **Project role**: Node.js server bridges Elegoo SDCP printers to a browser UI. Status and camera updates flow printer ➜ server WebSocket ➜ browser WebSocket; discovery is UDP broadcast.
+- **Entry points**: Server in [server.js](server.js) (Express, WebSocket hub, camera relay). Client UI in [public/app.js](public/app.js). SDCP protocol client in [utils/sdcp-client.js](utils/sdcp-client.js). Printer discovery in [utils/printer-discovery.js](utils/printer-discovery.js).
+- **Run/test**: `npm install` then `npm start` (port 3000 default, override PORT). Tests via `npm test` (Jest, module-alias for utils, see [jest.config.js](jest.config.js) and [jest.setup.js](jest.setup.js)).
+- **Networking & discovery**: UDP broadcast `M99999` on port 3000 finds printers ([utils/printer-discovery.js](utils/printer-discovery.js)). Auto-connect on startup cycles through responses, skips proxies, retries per device before rediscovery.
+- **SDCP protocol**: WebSocket to `ws://<printer>:3030/websocket`, commands 0=status, 1=attributes, 386=camera URL. Status/attribute messages routed through `onStatus` callback; request/response tracked by UUID `RequestID` map. Reconnect loop every 5s when lost.
+- **Status parsing**: [utils/status-utils.js](utils/status-utils.js) maps machine/job codes from [utils/status-codes.js](utils/status-codes.js) into `printerStatus.status.{machine,job,consolidated}` plus `status_code` (legacy). Ignore UNKNOWN/null transitions. Progress/time/layers rely on printer-reported fields only.
+- **State broadcast**: Server caches `printerStatus` (defaultDisconnected baseline). `broadcastToClients` throttles to 1 msg/sec for all browser WebSockets. `buildStatusPayload` always bundles user stats snapshot.
+- **User/IP tracking**: [utils/ip-utils.js](utils/ip-utils.js) resolves client IP from headers (x-forwarded-for, Cloudflare) with optional local-IP filtering flag `DEBUG_DISABLE_LOCAL_IP_FILTER` (default true to disable filter). [utils/user-stats.js](utils/user-stats.js) counts active/total web and camera clients, unique IPs, user-agents. Used in status payload and `/api/admin` (locals only unless specific IP whitelisted).
+- **Camera pipeline**: `requestCameraURL` (Cmd 386) sets `cameraStreamURL`; [server.js](server.js#L210) fetches MJPEG stream, parses multipart boundaries, throttles to MAX_FPS=15, stores `latestFrame`, and pushes to subscribers. Browser hits `/api/camera` (multipart MJPEG) and pauses stream when idle depending on UI setting.
+- **Client UI expectations**: [public/app.js](public/app.js) renders status fields, ETA freeze logic when not printing, per-state color map, and camera pause-on-idle toggle stored in localStorage. Expects `payload.printer.status.machine/job/consolidated`, `progress`, `temperatures`, `layers`, `cameraAvailable`, and user counts.
+- **API surface**: `GET /api/status` returns `{printer, users}`; `GET /api/discover` runs UDP discovery; `POST /api/connect/:ip` forces connection; `GET /api/camera` streams MJPEG; `GET /api/admin` requires local IP; WebSocket root sends `type=status` events.
+- **Conventions**: Use module-alias path `utils/...`; keep timestamps ISO via [utils/logger.js](utils/logger.js) which monkey-patches console. Prefer existing status/camera helpers instead of ad-hoc parsing. Maintain broadcast throttling and auto-reconnect behavior.
+- **Common pitfalls**: Do not compute progress/ETA manually—trust printer fields. Camera URL ack codes map in `CAMERA_ACK_ERRORS`; unset or failed camera should set `cameraAvailable=false`. When adding admin-only features, respect `isLocalIP`/whitelist. Reattach `onStatus` after recreating `SDCPClient` on reconnect.
+- **Extending**: New SDCP commands should use `sendCommand` with RequestID handler and timeouts. Additional status codes belong in [utils/status-codes.js](utils/status-codes.js) and mapping helpers. Extra client fields must be wired through `printerStatus` and UI update flow, and included in `buildStatusPayload`.
 
-## Key Patterns & Conventions
-- **Printer Discovery:** Use `PrinterDiscovery.discover(timeout)` to find printers. Returns array of printer info objects.
-- **SDCP Commands:**
-  - `sendCommand(cmdId, data)` on SDCPClient sends JSON commands. Common IDs:
-    - `0`: Status
-    - `1`: Attributes
-    - `386`: Camera URL
-- **WebSocket Data Flow:**
-  - Server acts as a proxy between browser and printer, relaying SDCP messages.
-  - Real-time updates are pushed to the browser via WebSocket.
-- **Manual Testing:** Use `utils/websocket-tester.js` for CLI-based SDCP command testing.
-
-## Developer Workflows
-- **Start server:** `npm start` (see `package.json`)
-- **Install deps:** `npm install`
-- **Web UI:** Open `http://localhost:3000` after starting server.
-- **Manual connect:** `curl -X POST http://localhost:3000/api/connect/<printer-ip>`
-- **Test SDCP:** Run `node utils/websocket-tester.js` for interactive CLI.
-
-## Integration Points
-- **External:**
-  - Elegoo printers (SDCP protocol)
-  - Browser clients (WebSocket, HTTP)
-- **Dependencies:**
-  - `express`, `ws`, `uuid` (see `package.json`)
-
-## Project-Specific Notes
-- No authentication (local network only)
-- Auto-reconnect logic in server and client
-- Camera feed may not be available on all printers (command 386)
-- All network communication is local (UDP 3000, TCP 3030)
-
-## References
-- See `README.md` for API endpoints, troubleshooting, and architecture diagram.
-- Example SDCP usage: `utils/websocket-tester.js`, `utils/sdcp-client.js`
-- Printer discovery: `utils/printer-discovery.js`
-- Web UI: `public/app.js`, `public/index.html`
-
----
-If any conventions or workflows are unclear, check `README.md` or ask for clarification.
+Feedback: Which sections need more depth (e.g., SDCP message shapes, UI fields, camera relay)?

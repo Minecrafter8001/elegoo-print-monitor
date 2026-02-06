@@ -5,6 +5,7 @@ const DEBUG_DISABLE_LOCAL_IP_FILTER =
   !('DEBUG_DISABLE_LOCAL_IP_FILTER' in process.env) ||
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === '' ||
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === 'true';
+const ENABLE_DEBUG_ENDPOINTS = process.env.ENABLE_DEBUG_ENDPOINTS === 'true';
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -23,6 +24,7 @@ const wss = new WebSocket.Server({ server });
 const MAX_FPS = 15;
 const PORT = process.env.PORT || 3000;
 const STATUS_POLL_INTERVAL = 2000;
+const CAMERA_MAX_START_FAILURES = 3;
 const CAMERA_ACK_ERRORS = {
   1: 'Exceeded maximum simultaneous streaming limit',
   2: 'Camera does not exist',
@@ -47,6 +49,7 @@ let defaultPrinterStatus = {
   remainingTime: 0,
   calculatedTime: null,
   cameraAvailable: false,
+  cameraError: null,
   lastUpdate: null,
   customState: 0,
   layers: {
@@ -94,6 +97,7 @@ let printerStream = null;
 const cameraSubscribers = new Set(); // Clients subscribed to camera stream
 let latestFrame = null;
 const cameraContentType = 'image/jpeg';
+let cameraStartFailure = { lastError: null, count: 0 };
 
 const userStats = new UserStats();
 
@@ -104,6 +108,26 @@ function updateUserStatsAndBroadcast() {
   printerStatus.users = userStats.getSnapshot();
   // Notify connected web clients of updated stats
   broadcastToClients({ type: 'status', data: buildStatusPayload() });
+}
+
+function resetCameraFailureTracker() {
+  cameraStartFailure = { lastError: null, count: 0 };
+}
+
+function handleCameraStartFailure(errMessage) {
+  const message = errMessage || 'Unknown camera error';
+  if (cameraStartFailure.lastError === message) {
+    cameraStartFailure.count += 1;
+  } else {
+    cameraStartFailure = { lastError: message, count: 1 };
+  }
+
+  if (cameraStartFailure.count >= CAMERA_MAX_START_FAILURES) {
+    console.error(`Camera failed to start ${cameraStartFailure.count} times with the same error; exiting to restart. Error: ${message}`);
+    broadcastToClients({ type: 'server_restarting', data: { reason: message } });
+    // Give the broadcast a moment to flush before exiting so PM2 can restart us
+    setTimeout(() => process.exit(1), 1000);
+  }
 }
 
 
@@ -209,6 +233,21 @@ app.post('/api/connect/:ip', express.json(), async (req, res) => {
   }
 });
 
+// Debug endpoint to trigger a controlled restart (local-only, flag-gated)
+if (ENABLE_DEBUG_ENDPOINTS) {
+  app.get('/api/debug/restart', (req, res) => {
+    const clientIP = resolveClientIP(req, req.socket);
+    if (!isLocalIP(clientIP)) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const reason = 'Manual restart trigger via /api/debug/restart';
+    broadcastToClients({ type: 'server_restarting', data: { reason } });
+    res.json({ success: true, message: 'Restarting server now' });
+    setTimeout(() => process.exit(1), 5000);
+  });
+}
+
 // Admin endpoint - only accessible from local addresses
 app.get('/api/admin', (req, res) => {
   const clientIP = resolveClientIP(req, req.socket);
@@ -289,6 +328,17 @@ function broadcastToClients(message) {
   const data = JSON.stringify(message);
   const minInterval = 1000; // 1 second
 
+  // High-priority messages bypass throttling
+  if (message?.type === 'server_restarting') {
+    webClients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
+      }
+    });
+    lastBroadcastTime = now;
+    return;
+  }
+
   if (now - lastBroadcastTime >= minInterval) {
     // Send immediately
     webClients.forEach((client) => {
@@ -327,6 +377,7 @@ function updatePrinterStatus(data) {
     printerStatus.connected = false;
     printerStatus.state = 'Disconnected';
     printerStatus.cameraAvailable = false;
+    printerStatus.cameraError = 'Printer unreachable';
     printerStatus.lastUpdate = new Date().toISOString();
     printerStatus.customState = 0;
     printerStatus.machine_status = 'UNKNOWN';
@@ -453,16 +504,22 @@ async function setupCameraURL() {
     
     if (ack === 0 && videoUrl) {
       printerStatus.cameraAvailable = true;
+      printerStatus.cameraError = null;
       // Store the URL locally for polling, but don't send to clients
       cameraStreamURL = `http://${videoUrl}`;
       console.log('Camera stream enabled');
     } else {
-      console.warn('Camera not available:', CAMERA_ACK_ERRORS[ack] || `Unknown error code ${ack}`);
+      const reason = CAMERA_ACK_ERRORS[ack] || `Unknown error code ${ack}`;
+      console.warn('Camera not available:', reason);
       printerStatus.cameraAvailable = false;
+      printerStatus.cameraError = reason;
+      cameraStreamURL = null;
     }
   } catch (err) {
     console.warn('Failed to setup camera:', err.message);
     printerStatus.cameraAvailable = false;
+    printerStatus.cameraError = err.message;
+    cameraStreamURL = null;
   }
 }
 
@@ -546,7 +603,9 @@ async function connectToPrinter(printerIP, printerName = null) {
 async function startCameraStreaming() {
   if (!cameraStreamURL) {
     printerStatus.cameraAvailable = false;
+    printerStatus.cameraError = printerStatus.cameraError || 'Camera not available';
     broadcastToClients({ type: 'status', data: buildStatusPayload() });
+    resetCameraFailureTracker();
     return;
   }
 
@@ -556,6 +615,9 @@ async function startCameraStreaming() {
     if (!response.ok) {
       throw new Error(`Camera error ${response.status}, ${response.statusText}`);
     }
+
+    resetCameraFailureTracker();
+    printerStatus.cameraError = null;
 
     // Extract boundary from multipart content-type header
     const contentType = response.headers.get('content-type');
@@ -625,6 +687,7 @@ async function startCameraStreaming() {
         }
       } catch (err) {
         console.error('Camera stream error:', err.message);
+        handleCameraStartFailure(err.message);
         // Retry after a delay
         setTimeout(() => {
           if (cameraStreamURL) {
@@ -637,6 +700,10 @@ async function startCameraStreaming() {
     printerStream = processStream();
   } catch (err) {
     console.error('Failed to start camera stream:', err.message);
+    printerStatus.cameraAvailable = false;
+    printerStatus.cameraError = err.message;
+    broadcastToClients({ type: 'status', data: buildStatusPayload() });
+    handleCameraStartFailure(err.message);
     // Retry after a delay
     setTimeout(() => {
       if (cameraStreamURL) {

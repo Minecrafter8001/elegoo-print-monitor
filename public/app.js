@@ -7,6 +7,7 @@ let lastPrinterState = null;
 let frozenETA = null;
 let frozenETAState = null;
 let lastPayload = null;
+let toastIdCounter = 0;
 
 // Settings object
 const defaultSettings = {
@@ -80,6 +81,13 @@ function connectWebSocket() {
             if (message.type === 'status') {
                 lastPayload = message.data;
                 updateUI(message.data);
+            } else if (message.type === 'server_restarting') {
+                showToast({
+                    title: 'Server restarting…',
+                    body: message.data?.reason || 'Server restarting',
+                    hint: 'The page will reconnect automatically.',
+                    duration: 5000
+                });
             }
         } catch (err) {
             console.error('Failed to parse message:', err);
@@ -265,6 +273,7 @@ function updateUI(payload) {
     const cameraFeed = document.getElementById('cameraFeed');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
+    const cameraPlaceholderLabel = cameraPlaceholder.querySelector('span') || cameraPlaceholder;
 
     // Use job state for camera idle detection - check if either machine or job is idle
     lastPrinterState = jobState;
@@ -305,6 +314,10 @@ function updateUI(payload) {
         cameraPlaceholder.style.display = 'flex';
         cameraOverlay.style.display = 'none';
         cameraInitialized = false;
+        const message = printer.cameraError || 'No camera feed available';
+        if (cameraPlaceholderLabel) {
+            cameraPlaceholderLabel.textContent = message;
+        }
     }
 }
 
@@ -355,6 +368,54 @@ function initPauseOnIdleButton() {
         btn.classList.toggle('active', settings.pauseOnIdle);
         toggleCameraStream();
     });
+}
+
+function showToast({ title, body, hint, duration = 15000 }) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toastId = `toast-${++toastIdCounter}`;
+    const card = document.createElement('div');
+    card.className = 'toast-card';
+    card.id = toastId;
+
+    const close = document.createElement('div');
+    close.className = 'toast-close';
+    close.textContent = '×';
+    close.onclick = () => dismissToast(card, container);
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'toast-title';
+    titleEl.textContent = title || 'Notice';
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'toast-body';
+    bodyEl.textContent = body || '';
+
+    const hintEl = document.createElement('div');
+    hintEl.className = 'toast-hint';
+    hintEl.textContent = hint || '';
+
+    card.appendChild(close);
+    card.appendChild(titleEl);
+    if (body) card.appendChild(bodyEl);
+    if (hint) card.appendChild(hintEl);
+
+    container.appendChild(card);
+
+    if (duration > 0) {
+        setTimeout(() => dismissToast(card, container), duration);
+    }
+}
+
+function dismissToast(card, container) {
+    if (!card || !container || card.parentNode !== container) return;
+    card.style.animation = 'toast-out 220ms ease-in forwards';
+    setTimeout(() => {
+        if (card.parentNode === container) {
+            container.removeChild(card);
+        }
+    }, 220);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
