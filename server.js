@@ -416,20 +416,10 @@ function handleChatInit(ws, message) {
     return;
   }
   
-  // Check for blocked words in nickname
-  const blockedWord = ChatData.containsBlockedWord(nickname);
-  if (blockedWord) {
-    ws.send(JSON.stringify({
-      type: 'chat_error',
-      error: `Nickname contains blocked word: "${blockedWord}"`
-    }));
-    return;
-  }
-  
   // Store nickname
   ws.chat.nickname = nickname;
   
-  // Check if nickname is reserved
+  // Check if nickname is reserved (do this BEFORE blocked word check)
   if (ChatData.isReservedNickname(nickname)) {
     // Check if IP is already verified for this nickname
     if (ChatData.isIPVerified(clientIP, nickname)) {
@@ -450,18 +440,29 @@ function handleChatInit(ws, message) {
         message: 'This is a reserved nickname. Please enter the password.'
       }));
     }
-  } else {
-    // Regular nickname - generate math challenge
-    ws.chat.challenge = generateMathChallenge();
-    ws.chat.verifiedHuman = false;
-    ws.chat.requiresPassword = false;
-    
-    // Send challenge to client
-    ws.send(JSON.stringify({
-      type: 'chat_challenge',
-      question: ws.chat.challenge.question
-    }));
+    return; // Exit early for reserved nicknames
   }
+  
+  // Check for blocked words in nickname (only for non-reserved nicknames)
+  const blockedWord = ChatData.containsBlockedWord(nickname);
+  if (blockedWord) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Nickname contains blocked word: "${blockedWord}"`
+    }));
+    return;
+  }
+  
+  // Regular nickname - generate math challenge
+  ws.chat.challenge = generateMathChallenge();
+  ws.chat.verifiedHuman = false;
+  ws.chat.requiresPassword = false;
+  
+  // Send challenge to client
+  ws.send(JSON.stringify({
+    type: 'chat_challenge',
+    question: ws.chat.challenge.question
+  }));
 }
 
 /**
