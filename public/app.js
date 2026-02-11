@@ -94,6 +94,8 @@ function connectWebSocket() {
                 });
             } else if (message.type === 'chat_challenge') {
                 handleChatChallenge(message);
+            } else if (message.type === 'chat_password_required') {
+                handleChatPasswordRequired(message);
             } else if (message.type === 'chat_verified') {
                 handleChatVerified(message);
             } else if (message.type === 'chat_message') {
@@ -435,26 +437,61 @@ function dismissToast(card, container) {
 function handleChatChallenge(message) {
     const chatSetup = document.getElementById('chat-setup');
     const chatChallenge = document.getElementById('chat-challenge');
+    const chatPassword = document.getElementById('chat-password');
     const chatQuestion = document.getElementById('chat-question');
     const chatAnswer = document.getElementById('chat-answer');
     
     chatSetup.style.display = 'none';
+    chatPassword.style.display = 'none';
     chatChallenge.style.display = 'flex';
     chatQuestion.textContent = message.question;
     chatAnswer.value = '';
     chatAnswer.focus();
 }
 
+function handleChatPasswordRequired(message) {
+    const chatSetup = document.getElementById('chat-setup');
+    const chatChallenge = document.getElementById('chat-challenge');
+    const chatPassword = document.getElementById('chat-password');
+    const chatPasswordInput = document.getElementById('chat-password-input');
+    
+    chatSetup.style.display = 'none';
+    chatChallenge.style.display = 'none';
+    chatPassword.style.display = 'flex';
+    chatPasswordInput.value = '';
+    chatPasswordInput.focus();
+    
+    // Show message if provided
+    if (message.message) {
+        showToast({
+            title: 'Reserved Nickname',
+            body: message.message,
+            duration: 5000
+        });
+    }
+}
+
 function handleChatVerified(message) {
     if (message.success) {
         chatVerified = true;
         const chatChallenge = document.getElementById('chat-challenge');
+        const chatPassword = document.getElementById('chat-password');
         const chatMain = document.getElementById('chat-main');
         const chatInput = document.getElementById('chat-input');
         
         chatChallenge.style.display = 'none';
+        chatPassword.style.display = 'none';
         chatMain.style.display = 'flex';
         chatInput.focus();
+        
+        // Show welcome message if provided
+        if (message.message) {
+            showToast({
+                title: 'Verified!',
+                body: message.message,
+                duration: 3000
+            });
+        }
     } else {
         // Show error as a brief message, then restore the question
         const chatQuestion = document.getElementById('chat-question');
@@ -513,6 +550,8 @@ function initChatHandlers() {
     const chatNicknameInput = document.getElementById('chat-nickname');
     const chatVerifyBtn = document.getElementById('chat-verify');
     const chatAnswerInput = document.getElementById('chat-answer');
+    const chatPasswordVerifyBtn = document.getElementById('chat-password-verify');
+    const chatPasswordInput = document.getElementById('chat-password-input');
     const chatSendBtn = document.getElementById('chat-send');
     const chatInputField = document.getElementById('chat-input');
     
@@ -536,7 +575,7 @@ function initChatHandlers() {
         }
     });
     
-    // Verify button
+    // Verify button (math challenge)
     chatVerifyBtn.addEventListener('click', () => {
         const answer = chatAnswerInput.value;
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -548,6 +587,25 @@ function initChatHandlers() {
     chatAnswerInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             chatVerifyBtn.click();
+        }
+    });
+    
+    // Password verify button
+    chatPasswordVerifyBtn.addEventListener('click', () => {
+        const password = chatPasswordInput.value;
+        if (!password) {
+            alert('Please enter a password');
+            return;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'chat_verify', password }));
+        }
+    });
+    
+    // Enter key for password
+    chatPasswordInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            chatPasswordVerifyBtn.click();
         }
     });
     

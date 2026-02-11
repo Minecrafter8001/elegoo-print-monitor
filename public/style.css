@@ -583,6 +583,40 @@ footer {
     text-align: center;
 }
 
+.chat-password,
+.chat-challenge {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.chat-password p {
+    color: #a0a0a0;
+    margin: 0;
+}
+
+.password-content {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.password-input {
+    flex: 1;
+    padding: 10px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 1em;
+}
+
+.password-input:focus {
+    outline: none;
+    border-color: #00d4ff;
+    box-shadow: 0 0 6px rgba(0, 212, 255, 0.3);
+}
+
 .chat-messages {
     background: #0f3460;
     border: 1px solid #1a4d7a;

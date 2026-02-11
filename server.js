@@ -14,6 +14,7 @@ require('utils/logger');
 const { getClientIP, isLocalIP } = require('utils/ip-utils');
 const { parseStatusPayload } = require('utils/status-utils');
 const UserStats = require('utils/user-stats');
+const ChatData = require('utils/chat-data');
 
 const PrinterDiscovery = require('utils/printer-discovery');
 const SDCPClient = require('utils/sdcp-client');
@@ -391,11 +392,12 @@ wss.on('connection', (ws, req) => {
 });
 
 /**
- * Handle chat_init message: user sets nickname and requests math challenge
+ * Handle chat_init message: user sets nickname and requests challenge
  * Message format: { type: "chat_init", nickname: string }
  */
 function handleChatInit(ws, message) {
   const nickname = (message.nickname || '').trim();
+  const clientIP = ws._clientIP || 'unknown';
   
   // Validate nickname
   if (!nickname) {
@@ -414,23 +416,102 @@ function handleChatInit(ws, message) {
     return;
   }
   
-  // Store nickname and generate challenge
-  ws.chat.nickname = nickname;
-  ws.chat.challenge = generateMathChallenge();
-  ws.chat.verifiedHuman = false;
+  // Check for blocked words in nickname
+  const blockedWord = ChatData.containsBlockedWord(nickname);
+  if (blockedWord) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Nickname contains blocked word: "${blockedWord}"`
+    }));
+    return;
+  }
   
-  // Send challenge to client
-  ws.send(JSON.stringify({
-    type: 'chat_challenge',
-    question: ws.chat.challenge.question
-  }));
+  // Store nickname
+  ws.chat.nickname = nickname;
+  
+  // Check if nickname is reserved
+  if (ChatData.isReservedNickname(nickname)) {
+    // Check if IP is already verified for this nickname
+    if (ChatData.isIPVerified(clientIP, nickname)) {
+      // Auto-verify returning user
+      ws.chat.verifiedHuman = true;
+      ws.chat.challenge = null;
+      ChatData.updateIPLastSeen(clientIP);
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: true,
+        message: 'Welcome back! Auto-verified from known IP.'
+      }));
+    } else {
+      // Request password for reserved nickname
+      ws.chat.requiresPassword = true;
+      ws.send(JSON.stringify({
+        type: 'chat_password_required',
+        message: 'This is a reserved nickname. Please enter the password.'
+      }));
+    }
+  } else {
+    // Regular nickname - generate math challenge
+    ws.chat.challenge = generateMathChallenge();
+    ws.chat.verifiedHuman = false;
+    ws.chat.requiresPassword = false;
+    
+    // Send challenge to client
+    ws.send(JSON.stringify({
+      type: 'chat_challenge',
+      question: ws.chat.challenge.question
+    }));
+  }
 }
 
 /**
- * Handle chat_verify message: user answers the math challenge
- * Message format: { type: "chat_verify", answer: number | string }
+ * Handle chat_verify message: user answers the math challenge or provides password
+ * Message format: { type: "chat_verify", answer: number | string, password: string }
  */
 function handleChatVerify(ws, message) {
+  const clientIP = ws._clientIP || 'unknown';
+  
+  // Check if this is a password verification
+  if (ws.chat.requiresPassword) {
+    const password = message.password || message.answer;
+    
+    if (!password) {
+      ws.send(JSON.stringify({
+        type: 'chat_error',
+        error: 'Password is required for this nickname'
+      }));
+      return;
+    }
+    
+    // Verify password
+    if (ChatData.verifyPassword(ws.chat.nickname, password)) {
+      // Password correct - mark as verified and save IP
+      ws.chat.verifiedHuman = true;
+      ws.chat.requiresPassword = false;
+      ChatData.addVerifiedIP(clientIP, ws.chat.nickname);
+      
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: true,
+        message: 'Password verified! Your IP has been saved for future logins.'
+      }));
+    } else {
+      // Password incorrect
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: false,
+        error: 'Incorrect password. Please try again.'
+      }));
+      // Send password request again
+      ws.send(JSON.stringify({
+        type: 'chat_password_required',
+        message: 'This is a reserved nickname. Please enter the password.'
+      }));
+    }
+    return;
+  }
+  
+  // Regular math challenge verification
   if (!ws.chat.challenge) {
     ws.send(JSON.stringify({
       type: 'chat_error',
@@ -502,6 +583,16 @@ function handleChatMessage(ws, message) {
     ws.send(JSON.stringify({
       type: 'chat_error',
       error: `Message too long (max ${CHAT_MESSAGE_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
+  
+  // Check for blocked words in message
+  const blockedWord = ChatData.containsBlockedWord(text);
+  if (blockedWord) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Message contains blocked word: "${blockedWord}"`
     }));
     return;
   }
@@ -1003,6 +1094,9 @@ async function autoConnect() {
 // Start server
 server.listen(PORT, () => {
   console.log(`Elegoo Print Monitor server running on http://localhost:${PORT}`);
+  
+  // Load chat data
+  ChatData.loadData();
   
   // Auto-connect to printer on startup
   autoConnect();
