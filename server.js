@@ -6,6 +6,7 @@ const DEBUG_DISABLE_LOCAL_IP_FILTER =
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === '' ||
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === 'true';
 const ENABLE_DEBUG_ENDPOINTS = process.env.ENABLE_DEBUG_ENDPOINTS === 'true';
+const ENABLE_RESTART_ON_ERROR = process.env.ENABLE_RESTART_ON_ERROR === 'true';
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -20,6 +21,7 @@ const SDCPClient = require('utils/sdcp-client');
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
 
 const MAX_FPS = 15;
 const PORT = process.env.PORT || 3000;
@@ -163,7 +165,7 @@ function handleCameraStartFailure(errMessage) {
     cameraStartFailure = { lastError: message, count: 1 };
   }
 
-  if (cameraStartFailure.count >= CAMERA_MAX_START_FAILURES) {
+  if (cameraStartFailure.count >= CAMERA_MAX_START_FAILURES && ENABLE_RESTART_ON_ERROR) {
     console.error(`Camera failed to start ${cameraStartFailure.count} times with the same error; exiting to restart. Error: ${message}`);
     broadcastToClients({ type: 'server_restarting', data: { reason: message } });
     // Give the broadcast a moment to flush before exiting so PM2 can restart us

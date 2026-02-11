@@ -13,6 +13,7 @@ module.exports = {
         PORT: 3001,
         DEBUG_DISABLE_LOCAL_IP_FILTER: 'false',
         ENABLE_DEBUG_ENDPOINTS: 'false',
+        ENABLE_RESTART_ON_ERROR: 'false',
         WS_UPDATE_INTERVAL: 250
       }
     }
