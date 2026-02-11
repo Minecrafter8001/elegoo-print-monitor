@@ -16,8 +16,18 @@ const BLOCKED_WORDS_FILE = path.join(DATA_DIR, 'blocked-words.json');
 
 // In-memory cache
 let reservedNicknames = {};
+let reservedNicknamesLower = {};
 let verifiedIPs = {};
 let blockedWords = [];
+
+function normalizeNickname(nickname) {
+  return (nickname || '').toLowerCase();
+}
+
+function getReservedEntry(nickname) {
+  const key = normalizeNickname(nickname);
+  return reservedNicknamesLower[key] || null;
+}
 
 /**
  * Initialize data files if they don't exist (copy from examples)
@@ -69,6 +79,13 @@ function loadData() {
     // Load reserved nicknames
     const reservedData = fs.readFileSync(RESERVED_NICKNAMES_FILE, 'utf8');
     reservedNicknames = JSON.parse(reservedData);
+    reservedNicknamesLower = Object.keys(reservedNicknames).reduce((acc, key) => {
+      const normalizedKey = normalizeNickname(key);
+      if (!acc[normalizedKey]) {
+        acc[normalizedKey] = { key, value: reservedNicknames[key] };
+      }
+      return acc;
+    }, {});
 
     // Load verified IPs
     const verifiedIPsData = fs.readFileSync(VERIFIED_IPS_FILE, 'utf8');
@@ -108,15 +125,17 @@ function hashPassword(password) {
  * Check if a nickname is reserved
  */
 function isReservedNickname(nickname) {
-  return reservedNicknames.hasOwnProperty(nickname);
+  return !!getReservedEntry(nickname);
 }
 
 /**
  * Verify a password for a reserved nickname
  */
 function verifyPassword(nickname, password) {
-  const reserved = reservedNicknames[nickname];
-  if (!reserved) return false;
+  const entry = getReservedEntry(nickname);
+  if (!entry) return false;
+
+  const reserved = entry.value;
   
   const passwordHash = hashPassword(password);
   return passwordHash === reserved.passwordHash;
@@ -128,15 +147,18 @@ function verifyPassword(nickname, password) {
 function isIPVerified(ip, nickname) {
   const verified = verifiedIPs[ip];
   if (!verified) return false;
-  return verified.nickname === nickname;
+  return normalizeNickname(verified.nickname) === normalizeNickname(nickname);
 }
 
 /**
  * Add or update verified IP
  */
 function addVerifiedIP(ip, nickname) {
+  const reservedEntry = getReservedEntry(nickname);
+  const storedNickname = reservedEntry ? reservedEntry.key : nickname;
+
   verifiedIPs[ip] = {
-    nickname,
+    nickname: storedNickname,
     verifiedAt: verifiedIPs[ip]?.verifiedAt || new Date().toISOString(),
     lastSeenAt: new Date().toISOString()
   };
