@@ -9,6 +9,10 @@ let frozenETAState = null;
 let lastPayload = null;
 let toastIdCounter = 0;
 
+// Chat state
+let chatVerified = false;
+let chatNickname = "";
+
 // Settings object
 const defaultSettings = {
     pauseOnIdle: true
@@ -88,6 +92,14 @@ function connectWebSocket() {
                     hint: 'The page will reconnect automatically.',
                     duration: 5000
                 });
+            } else if (message.type === 'chat_challenge') {
+                handleChatChallenge(message);
+            } else if (message.type === 'chat_verified') {
+                handleChatVerified(message);
+            } else if (message.type === 'chat_message') {
+                handleChatMessage(message);
+            } else if (message.type === 'chat_error') {
+                handleChatError(message);
             }
         } catch (err) {
             console.error('Failed to parse message:', err);
@@ -418,9 +430,152 @@ function dismissToast(card, container) {
     }, 220);
 }
 
+// ---------------- CHAT HANDLERS ----------------
+
+function handleChatChallenge(message) {
+    const chatSetup = document.getElementById('chat-setup');
+    const chatChallenge = document.getElementById('chat-challenge');
+    const chatQuestion = document.getElementById('chat-question');
+    const chatAnswer = document.getElementById('chat-answer');
+    
+    chatSetup.style.display = 'none';
+    chatChallenge.style.display = 'flex';
+    chatQuestion.textContent = message.question;
+    chatAnswer.value = '';
+    chatAnswer.focus();
+}
+
+function handleChatVerified(message) {
+    if (message.success) {
+        chatVerified = true;
+        const chatChallenge = document.getElementById('chat-challenge');
+        const chatMain = document.getElementById('chat-main');
+        const chatInput = document.getElementById('chat-input');
+        
+        chatChallenge.style.display = 'none';
+        chatMain.style.display = 'flex';
+        chatInput.focus();
+    } else {
+        // Show error as a brief message
+        const chatQuestion = document.getElementById('chat-question');
+        const originalText = chatQuestion.textContent;
+        chatQuestion.textContent = message.error || 'Incorrect answer';
+        chatQuestion.style.color = '#e74c3c';
+        setTimeout(() => {
+            chatQuestion.style.color = '#00d4ff';
+        }, 2000);
+    }
+}
+
+function handleChatMessage(message) {
+    const chatMessages = document.getElementById('chat-messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'chat-message';
+    
+    const header = document.createElement('div');
+    header.className = 'chat-message-header';
+    
+    const nickname = document.createElement('span');
+    nickname.className = 'chat-nickname';
+    nickname.textContent = message.nickname || 'Anon';
+    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'chat-timestamp';
+    const time = new Date(message.timestamp);
+    timestamp.textContent = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    header.appendChild(nickname);
+    header.appendChild(timestamp);
+    
+    const text = document.createElement('div');
+    text.className = 'chat-text';
+    text.textContent = message.text;
+    
+    messageDiv.appendChild(header);
+    messageDiv.appendChild(text);
+    chatMessages.appendChild(messageDiv);
+    
+    // Auto-scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function handleChatError(message) {
+    showToast({
+        title: 'Chat Error',
+        body: message.error || 'An error occurred',
+        duration: 3000
+    });
+}
+
+function initChatHandlers() {
+    const chatStartBtn = document.getElementById('chat-start');
+    const chatNicknameInput = document.getElementById('chat-nickname');
+    const chatVerifyBtn = document.getElementById('chat-verify');
+    const chatAnswerInput = document.getElementById('chat-answer');
+    const chatSendBtn = document.getElementById('chat-send');
+    const chatInputField = document.getElementById('chat-input');
+    
+    // Start chat button
+    chatStartBtn.addEventListener('click', () => {
+        const nickname = chatNicknameInput.value.trim();
+        if (!nickname) {
+            alert('Please enter a nickname');
+            return;
+        }
+        chatNickname = nickname;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'chat_init', nickname }));
+        }
+    });
+    
+    // Enter key for nickname
+    chatNicknameInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            chatStartBtn.click();
+        }
+    });
+    
+    // Verify button
+    chatVerifyBtn.addEventListener('click', () => {
+        const answer = chatAnswerInput.value;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'chat_verify', answer }));
+        }
+    });
+    
+    // Enter key for answer
+    chatAnswerInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            chatVerifyBtn.click();
+        }
+    });
+    
+    // Send message button
+    chatSendBtn.addEventListener('click', () => {
+        const text = chatInputField.value.trim();
+        if (!text) return;
+        if (!chatVerified) {
+            alert('Please complete verification first');
+            return;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'chat_message', text }));
+            chatInputField.value = '';
+        }
+    });
+    
+    // Enter key to send message
+    chatInputField.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            chatSendBtn.click();
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Elegoo Print Monitor starting...');
     initPauseOnIdleButton();
+    initChatHandlers();
     connectWebSocket();
 
     // Update UI every second to keep clock and other elements fresh

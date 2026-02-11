@@ -35,6 +35,13 @@ const CAMERA_ACK_ERRORS = {
   3: 'Unknown error'
 };
 
+// Chat configuration - all limits controlled by environment variables
+const CHAT_MESSAGE_MAX_LENGTH = Number(process.env.CHAT_MESSAGE_MAX_LENGTH) || 500;
+const CHAT_NICKNAME_MAX_LENGTH = Number(process.env.CHAT_NICKNAME_MAX_LENGTH) || 24;
+const CHAT_MESSAGE_COOLDOWN_MS = Number(process.env.CHAT_MESSAGE_COOLDOWN_MS) || 1000;
+const CHAT_MATH_MIN = Number(process.env.CHAT_MATH_MIN) || 1;
+const CHAT_MATH_MAX = Number(process.env.CHAT_MATH_MAX) || 10;
+
 // Store printer data
 let printerClient = null;
 let defaultPrinterStatus = {
@@ -107,6 +114,23 @@ const userStats = new UserStats();
 
 const resolveClientIP = (req, socket) =>
   getClientIP(req, socket, DEBUG_DISABLE_LOCAL_IP_FILTER);
+
+/**
+ * Generate a simple math challenge for anti-bot verification
+ * Returns an object with the challenge question and answer
+ */
+function generateMathChallenge() {
+  const min = CHAT_MATH_MIN;
+  const max = CHAT_MATH_MAX;
+  const a = Math.floor(Math.random() * (max - min + 1)) + min;
+  const b = Math.floor(Math.random() * (max - min + 1)) + min;
+  return {
+    a,
+    b,
+    answer: a + b,
+    question: `${a} + ${b} = ?`,
+  };
+}
 
 function updateUserStatsAndBroadcast() {
   printerStatus.users = userStats.getSnapshot();
@@ -306,8 +330,36 @@ wss.on('connection', (ws, req) => {
   } catch (_) {}
   updateUserStatsAndBroadcast();
 
+  // Initialize chat state for this connection (backwards compatible - no impact if not used)
+  ws.chat = {
+    nickname: null,
+    verifiedHuman: false,
+    challenge: null, // { a, b, answer, question }
+    lastChatAt: 0,   // timestamp for rate limiting
+  };
+
   // Send current status
   ws.send(JSON.stringify({ type: 'status', data: buildStatusPayload() }));
+
+  // Handle incoming messages from client
+  ws.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      
+      // Handle chat-related messages (additive - existing clients won't send these)
+      if (message.type === 'chat_init') {
+        handleChatInit(ws, message);
+      } else if (message.type === 'chat_verify') {
+        handleChatVerify(ws, message);
+      } else if (message.type === 'chat_message') {
+        handleChatMessage(ws, message);
+      }
+      // Future: handle other message types here
+      // Existing clients that don't send these types are unaffected
+    } catch (err) {
+      console.error('Error handling WebSocket message:', err);
+    }
+  });
 
   const cleanup = () => {
     console.log('Web client disconnected');
@@ -322,6 +374,139 @@ wss.on('connection', (ws, req) => {
     cleanup();
   });
 });
+
+/**
+ * Handle chat_init message: user sets nickname and requests math challenge
+ * Message format: { type: "chat_init", nickname: string }
+ */
+function handleChatInit(ws, message) {
+  const nickname = (message.nickname || '').trim();
+  
+  // Validate nickname
+  if (!nickname) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Nickname cannot be empty'
+    }));
+    return;
+  }
+  
+  if (nickname.length > CHAT_NICKNAME_MAX_LENGTH) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Nickname too long (max ${CHAT_NICKNAME_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
+  
+  // Store nickname and generate challenge
+  ws.chat.nickname = nickname;
+  ws.chat.challenge = generateMathChallenge();
+  ws.chat.verifiedHuman = false;
+  
+  // Send challenge to client
+  ws.send(JSON.stringify({
+    type: 'chat_challenge',
+    question: ws.chat.challenge.question
+  }));
+}
+
+/**
+ * Handle chat_verify message: user answers the math challenge
+ * Message format: { type: "chat_verify", answer: number | string }
+ */
+function handleChatVerify(ws, message) {
+  if (!ws.chat.challenge) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'No active challenge. Please start chat first.'
+    }));
+    return;
+  }
+  
+  const userAnswer = Number(message.answer);
+  const correctAnswer = ws.chat.challenge.answer;
+  
+  if (userAnswer === correctAnswer) {
+    // Verification successful
+    ws.chat.verifiedHuman = true;
+    ws.chat.challenge = null;
+    ws.send(JSON.stringify({
+      type: 'chat_verified',
+      success: true
+    }));
+  } else {
+    // Incorrect answer - generate new challenge
+    ws.chat.challenge = generateMathChallenge();
+    ws.send(JSON.stringify({
+      type: 'chat_verified',
+      success: false,
+      error: 'Incorrect answer. Try again.'
+    }));
+    // Send new challenge
+    ws.send(JSON.stringify({
+      type: 'chat_challenge',
+      question: ws.chat.challenge.question
+    }));
+  }
+}
+
+/**
+ * Handle chat_message: user sends a chat message (after verification)
+ * Message format: { type: "chat_message", text: string }
+ */
+function handleChatMessage(ws, message) {
+  // Check if user is verified
+  if (!ws.chat.verifiedHuman) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Please solve the challenge before chatting.'
+    }));
+    return;
+  }
+  
+  // Rate limiting - check cooldown
+  const now = Date.now();
+  const timeSinceLastMessage = now - ws.chat.lastChatAt;
+  if (timeSinceLastMessage < CHAT_MESSAGE_COOLDOWN_MS) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'You are sending messages too quickly.'
+    }));
+    return;
+  }
+  
+  // Validate and sanitize message text
+  const text = (message.text || '').trim();
+  if (!text) {
+    return; // Silently ignore empty messages
+  }
+  
+  // Enforce max length (truncate)
+  const finalText = text.length > CHAT_MESSAGE_MAX_LENGTH 
+    ? text.substring(0, CHAT_MESSAGE_MAX_LENGTH)
+    : text;
+  
+  // Update last chat timestamp
+  ws.chat.lastChatAt = now;
+  
+  // Construct chat message payload
+  const chatPayload = {
+    type: 'chat_message',
+    nickname: ws.chat.nickname || 'Anon',
+    text: finalText,
+    timestamp: new Date().toISOString()
+  };
+  
+  // Broadcast to all connected clients (no persistence - only in-memory)
+  const data = JSON.stringify(chatPayload);
+  webClients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  });
+}
+
 
 
 // --- Broadcast message to all connected web clients, throttled to once per second ---

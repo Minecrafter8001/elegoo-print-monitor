@@ -148,6 +148,35 @@
             </div>
         </div>
 
+        <!-- Chat Card -->
+        <div class="card chat-card">
+            <h2>Chat</h2>
+            
+            <div id="chat-setup" class="chat-setup">
+                <input id="chat-nickname" type="text" placeholder="Enter nickname" maxlength="24">
+                <button id="chat-start" class="chat-btn">Start Chat</button>
+            </div>
+
+            <div id="chat-challenge" class="chat-challenge" style="display:none;">
+                <p>Please solve this math problem to verify you're human:</p>
+                <div class="challenge-content">
+                    <span id="chat-question" class="challenge-question"></span>
+                    <input id="chat-answer" type="number" placeholder="Answer" class="challenge-input">
+                    <button id="chat-verify" class="chat-btn">Verify</button>
+                </div>
+            </div>
+
+            <div id="chat-main" class="chat-main" style="display:none;">
+                <div id="chat-messages" class="chat-messages"></div>
+                <div class="chat-input-area">
+                    <input id="chat-input" type="text" placeholder="Type message…" maxlength="500">
+                    <button id="chat-send" class="chat-btn">Send</button>
+                </div>
+            </div>
+        </div>
+
+        </div>
+
         <footer>
             <p>Print Monitor | Real-time monitoring via SDCP</p>
         </footer>
