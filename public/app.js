@@ -456,12 +456,13 @@ function handleChatVerified(message) {
         chatMain.style.display = 'flex';
         chatInput.focus();
     } else {
-        // Show error as a brief message
+        // Show error as a brief message, then restore the question
         const chatQuestion = document.getElementById('chat-question');
         const originalText = chatQuestion.textContent;
         chatQuestion.textContent = message.error || 'Incorrect answer';
         chatQuestion.style.color = '#e74c3c';
         setTimeout(() => {
+            chatQuestion.textContent = originalText;
             chatQuestion.style.color = '#00d4ff';
         }, 2000);
     }

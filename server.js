@@ -482,10 +482,14 @@ function handleChatMessage(ws, message) {
     return; // Silently ignore empty messages
   }
   
-  // Enforce max length (truncate)
-  const finalText = text.length > CHAT_MESSAGE_MAX_LENGTH 
-    ? text.substring(0, CHAT_MESSAGE_MAX_LENGTH)
-    : text;
+  // Enforce max length (reject if too long)
+  if (text.length > CHAT_MESSAGE_MAX_LENGTH) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Message too long (max ${CHAT_MESSAGE_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
   
   // Update last chat timestamp
   ws.chat.lastChatAt = now;
@@ -494,7 +498,7 @@ function handleChatMessage(ws, message) {
   const chatPayload = {
     type: 'chat_message',
     nickname: ws.chat.nickname || 'Anon',
-    text: finalText,
+    text: text,
     timestamp: new Date().toISOString()
   };
   
