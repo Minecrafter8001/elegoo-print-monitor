@@ -4,6 +4,43 @@
 
 const ChatData = require('utils/chat-data');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const RESERVED_FILE = path.join(DATA_DIR, 'reserved-nicknames.json');
+const BLOCKED_FILE = path.join(DATA_DIR, 'blocked-words.json');
+
+let originalReserved = null;
+let originalBlocked = null;
+
+beforeAll(() => {
+  originalReserved = fs.readFileSync(RESERVED_FILE, 'utf8');
+  originalBlocked = fs.readFileSync(BLOCKED_FILE, 'utf8');
+
+  const reserved = {
+    Admin: {
+      passwordHash: ChatData.hashPassword('password')
+    }
+  };
+
+  fs.writeFileSync(RESERVED_FILE, JSON.stringify(reserved, null, 2));
+  fs.writeFileSync(BLOCKED_FILE, JSON.stringify(['spam', 'bot'], null, 2));
+
+  ChatData.loadData();
+});
+
+afterAll(() => {
+  if (originalReserved !== null) {
+    fs.writeFileSync(RESERVED_FILE, originalReserved);
+  }
+
+  if (originalBlocked !== null) {
+    fs.writeFileSync(BLOCKED_FILE, originalBlocked);
+  }
+
+  ChatData.loadData();
+});
 
 describe('Chat Data Management', () => {
   describe('Password Hashing', () => {
@@ -33,9 +70,6 @@ describe('Chat Data Management', () => {
   });
 
   describe('Reserved Nicknames', () => {
-    beforeAll(() => {
-      ChatData.loadData();
-    });
 
     test('should identify reserved nicknames', () => {
       // "Admin" should be in the example reserved nicknames
@@ -98,9 +132,6 @@ describe('Chat Data Management', () => {
   });
 
   describe('Blocked Words Filtering', () => {
-    beforeAll(() => {
-      ChatData.loadData();
-    });
 
     test('should detect blocked words in text', () => {
       // Assuming "spam" is in the blocked words list
