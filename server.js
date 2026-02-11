@@ -35,7 +35,20 @@ const CAMERA_ACK_ERRORS = {
   3: 'Unknown error'
 };
 
-// Chat configuration - all limits controlled by environment variables
+/**
+ * Chat configuration - all limits controlled by environment variables
+ * 
+ * Environment Variables:
+ * - CHAT_MESSAGE_MAX_LENGTH: Maximum message length in characters (default: 500)
+ * - CHAT_NICKNAME_MAX_LENGTH: Maximum nickname length in characters (default: 24)
+ * - CHAT_MESSAGE_COOLDOWN_MS: Minimum time between messages in milliseconds (default: 1000)
+ * - CHAT_MATH_MIN: Minimum integer for math challenges (default: 1)
+ * - CHAT_MATH_MAX: Maximum integer for math challenges (default: 10)
+ * 
+ * Note: Chat messages are NEVER persisted to disk, database, or external services.
+ * They exist only in memory for the lifetime of the WebSocket connection.
+ * See CHAT_DOCUMENTATION.md for complete details.
+ */
 const CHAT_MESSAGE_MAX_LENGTH = Number(process.env.CHAT_MESSAGE_MAX_LENGTH) || 500;
 const CHAT_NICKNAME_MAX_LENGTH = Number(process.env.CHAT_NICKNAME_MAX_LENGTH) || 24;
 const CHAT_MESSAGE_COOLDOWN_MS = Number(process.env.CHAT_MESSAGE_COOLDOWN_MS) || 1000;
