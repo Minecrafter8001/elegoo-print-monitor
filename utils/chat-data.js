@@ -127,7 +127,8 @@ function verifyPassword(nickname, password) {
  */
 function isIPVerified(ip, nickname) {
   const verified = verifiedIPs[ip];
-  return verified && verified.nickname === nickname;
+  if (!verified) return false;
+  return verified.nickname === nickname;
 }
 
 /**
