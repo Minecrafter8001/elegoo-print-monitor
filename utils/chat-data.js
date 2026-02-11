@@ -19,6 +19,11 @@ let reservedNicknames = {};
 let reservedNicknamesLower = {};
 let verifiedIPs = {};
 let blockedWords = [];
+let watchersStarted = false;
+let reservedNicknameWatcher = null;
+let blockedWordsWatcher = null;
+let reservedReloadTimer = null;
+let blockedReloadTimer = null;
 
 function normalizeNickname(nickname) {
   return (nickname || '').toLowerCase();
@@ -101,6 +106,79 @@ function loadData() {
   } catch (err) {
     console.error('[ChatData] Error loading data:', err.message);
   }
+}
+
+function reloadReservedNicknames() {
+  try {
+    const reservedData = fs.readFileSync(RESERVED_NICKNAMES_FILE, 'utf8');
+    reservedNicknames = JSON.parse(reservedData);
+    reservedNicknamesLower = Object.keys(reservedNicknames).reduce((acc, key) => {
+      const normalizedKey = normalizeNickname(key);
+      if (!acc[normalizedKey]) {
+        acc[normalizedKey] = { key, value: reservedNicknames[key] };
+      }
+      return acc;
+    }, {});
+    console.log(`[ChatData] Reloaded ${Object.keys(reservedNicknames).length} reserved nicknames`);
+  } catch (err) {
+    console.error('[ChatData] Error reloading reserved nicknames:', err.message);
+  }
+}
+
+function reloadBlockedWords() {
+  try {
+    const blockedWordsData = fs.readFileSync(BLOCKED_WORDS_FILE, 'utf8');
+    blockedWords = JSON.parse(blockedWordsData).map(word => word.toLowerCase());
+    console.log(`[ChatData] Reloaded ${blockedWords.length} blocked words`);
+  } catch (err) {
+    console.error('[ChatData] Error reloading blocked words:', err.message);
+  }
+}
+
+function restartReservedNicknameWatcher() {
+  if (reservedNicknameWatcher) {
+    reservedNicknameWatcher.close();
+    reservedNicknameWatcher = null;
+  }
+  if (!fs.existsSync(RESERVED_NICKNAMES_FILE)) return;
+  reservedNicknameWatcher = fs.watch(RESERVED_NICKNAMES_FILE, (eventType) => {
+    if (reservedReloadTimer) {
+      clearTimeout(reservedReloadTimer);
+    }
+    reservedReloadTimer = setTimeout(() => {
+      reloadReservedNicknames();
+      if (eventType === 'rename') {
+        restartReservedNicknameWatcher();
+      }
+    }, 150);
+  });
+}
+
+function restartBlockedWordsWatcher() {
+  if (blockedWordsWatcher) {
+    blockedWordsWatcher.close();
+    blockedWordsWatcher = null;
+  }
+  if (!fs.existsSync(BLOCKED_WORDS_FILE)) return;
+  blockedWordsWatcher = fs.watch(BLOCKED_WORDS_FILE, (eventType) => {
+    if (blockedReloadTimer) {
+      clearTimeout(blockedReloadTimer);
+    }
+    blockedReloadTimer = setTimeout(() => {
+      reloadBlockedWords();
+      if (eventType === 'rename') {
+        restartBlockedWordsWatcher();
+      }
+    }, 150);
+  });
+}
+
+function startWatchers() {
+  if (watchersStarted) return;
+  watchersStarted = true;
+  initializeDataFiles();
+  restartReservedNicknameWatcher();
+  restartBlockedWordsWatcher();
 }
 
 /**
@@ -207,6 +285,7 @@ function getVerifiedIPInfo(ip) {
 
 module.exports = {
   loadData,
+  startWatchers,
   isReservedNickname,
   verifyPassword,
   isIPVerified,

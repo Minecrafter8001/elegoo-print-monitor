@@ -1126,6 +1126,7 @@ server.listen(PORT, () => {
   
   // Load chat data
   ChatData.loadData();
+  ChatData.startWatchers();
   
   // Auto-connect to printer on startup
   autoConnect();
