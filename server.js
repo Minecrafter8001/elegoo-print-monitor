@@ -58,6 +58,26 @@ const CHAT_MESSAGE_COOLDOWN_MS = Number(process.env.CHAT_MESSAGE_COOLDOWN_MS) ||
 const CHAT_MATH_MIN = Number(process.env.CHAT_MATH_MIN) || 1;
 const CHAT_MATH_MAX = Number(process.env.CHAT_MATH_MAX) || 10;
 
+function normalizeNickname(nickname) {
+  return (nickname || '').trim().toLowerCase();
+}
+
+function isNicknameInUse(nickname, currentWs) {
+  const normalized = normalizeNickname(nickname);
+  if (!normalized) return false;
+
+  for (const client of webClients) {
+    if (!client || client === currentWs) continue;
+    const activeNickname = client.chat?.nickname;
+    if (!activeNickname) continue;
+    if (normalizeNickname(activeNickname) === normalized) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Store printer data
 let printerClient = null;
 let defaultPrinterStatus = {
@@ -412,6 +432,14 @@ function handleChatInit(ws, message) {
     ws.send(JSON.stringify({
       type: 'chat_error',
       error: `Nickname too long (max ${CHAT_NICKNAME_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
+
+  if (isNicknameInUse(nickname, ws)) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Nickname is already in use. Please choose another.'
     }));
     return;
   }
