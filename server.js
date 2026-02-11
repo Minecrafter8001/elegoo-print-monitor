@@ -6,6 +6,7 @@ const DEBUG_DISABLE_LOCAL_IP_FILTER =
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === '' ||
   process.env.DEBUG_DISABLE_LOCAL_IP_FILTER === 'true';
 const ENABLE_DEBUG_ENDPOINTS = process.env.ENABLE_DEBUG_ENDPOINTS === 'true';
+const ENABLE_RESTART_ON_ERROR = process.env.ENABLE_RESTART_ON_ERROR === 'true';
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -13,6 +14,7 @@ require('utils/logger');
 const { getClientIP, isLocalIP } = require('utils/ip-utils');
 const { parseStatusPayload } = require('utils/status-utils');
 const UserStats = require('utils/user-stats');
+const ChatData = require('utils/chat-data');
 
 const PrinterDiscovery = require('utils/printer-discovery');
 const SDCPClient = require('utils/sdcp-client');
@@ -20,6 +22,7 @@ const SDCPClient = require('utils/sdcp-client');
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
 
 const MAX_FPS = 15;
 const PORT = process.env.PORT || 3000;
@@ -34,6 +37,26 @@ const CAMERA_ACK_ERRORS = {
   2: 'Camera does not exist',
   3: 'Unknown error'
 };
+
+/**
+ * Chat configuration - all limits controlled by environment variables
+ * 
+ * Environment Variables:
+ * - CHAT_MESSAGE_MAX_LENGTH: Maximum message length in characters (default: 500)
+ * - CHAT_NICKNAME_MAX_LENGTH: Maximum nickname length in characters (default: 24)
+ * - CHAT_MESSAGE_COOLDOWN_MS: Minimum time between messages in milliseconds (default: 1000)
+ * - CHAT_MATH_MIN: Minimum integer for math challenges (default: 1)
+ * - CHAT_MATH_MAX: Maximum integer for math challenges (default: 10)
+ * 
+ * Note: Chat messages are NEVER persisted to disk, database, or external services.
+ * They exist only in memory for the lifetime of the WebSocket connection.
+ * See CHAT_DOCUMENTATION.md for complete details.
+ */
+const CHAT_MESSAGE_MAX_LENGTH = Number(process.env.CHAT_MESSAGE_MAX_LENGTH) || 500;
+const CHAT_NICKNAME_MAX_LENGTH = Number(process.env.CHAT_NICKNAME_MAX_LENGTH) || 24;
+const CHAT_MESSAGE_COOLDOWN_MS = Number(process.env.CHAT_MESSAGE_COOLDOWN_MS) || 1000;
+const CHAT_MATH_MIN = Number(process.env.CHAT_MATH_MIN) || 1;
+const CHAT_MATH_MAX = Number(process.env.CHAT_MATH_MAX) || 10;
 
 // Store printer data
 let printerClient = null;
@@ -108,6 +131,23 @@ const userStats = new UserStats();
 const resolveClientIP = (req, socket) =>
   getClientIP(req, socket, DEBUG_DISABLE_LOCAL_IP_FILTER);
 
+/**
+ * Generate a simple math challenge for anti-bot verification
+ * Returns an object with the challenge question and answer
+ */
+function generateMathChallenge() {
+  const min = CHAT_MATH_MIN;
+  const max = CHAT_MATH_MAX;
+  const a = Math.floor(Math.random() * (max - min + 1)) + min;
+  const b = Math.floor(Math.random() * (max - min + 1)) + min;
+  return {
+    a,
+    b,
+    answer: a + b,
+    question: `${a} + ${b} = ?`,
+  };
+}
+
 function updateUserStatsAndBroadcast() {
   printerStatus.users = userStats.getSnapshot();
   // Notify connected web clients of updated stats
@@ -126,7 +166,7 @@ function handleCameraStartFailure(errMessage) {
     cameraStartFailure = { lastError: message, count: 1 };
   }
 
-  if (cameraStartFailure.count >= CAMERA_MAX_START_FAILURES) {
+  if (cameraStartFailure.count >= CAMERA_MAX_START_FAILURES && ENABLE_RESTART_ON_ERROR) {
     console.error(`Camera failed to start ${cameraStartFailure.count} times with the same error; exiting to restart. Error: ${message}`);
     broadcastToClients({ type: 'server_restarting', data: { reason: message } });
     // Give the broadcast a moment to flush before exiting so PM2 can restart us
@@ -306,8 +346,36 @@ wss.on('connection', (ws, req) => {
   } catch (_) {}
   updateUserStatsAndBroadcast();
 
+  // Initialize chat state for this connection (backwards compatible - no impact if not used)
+  ws.chat = {
+    nickname: null,
+    verifiedHuman: false,
+    challenge: null, // { a, b, answer, question }
+    lastChatAt: 0,   // timestamp for rate limiting
+  };
+
   // Send current status
   ws.send(JSON.stringify({ type: 'status', data: buildStatusPayload() }));
+
+  // Handle incoming messages from client
+  ws.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      
+      // Handle chat-related messages (additive - existing clients won't send these)
+      if (message.type === 'chat_init') {
+        handleChatInit(ws, message);
+      } else if (message.type === 'chat_verify') {
+        handleChatVerify(ws, message);
+      } else if (message.type === 'chat_message') {
+        handleChatMessage(ws, message);
+      }
+      // Future: handle other message types here
+      // Existing clients that don't send these types are unaffected
+    } catch (err) {
+      console.error('Error handling WebSocket message:', err);
+    }
+  });
 
   const cleanup = () => {
     console.log('Web client disconnected');
@@ -322,6 +390,234 @@ wss.on('connection', (ws, req) => {
     cleanup();
   });
 });
+
+/**
+ * Handle chat_init message: user sets nickname and requests challenge
+ * Message format: { type: "chat_init", nickname: string }
+ */
+function handleChatInit(ws, message) {
+  const nickname = (message.nickname || '').trim();
+  const clientIP = ws._clientIP || 'unknown';
+  
+  // Validate nickname
+  if (!nickname) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Nickname cannot be empty'
+    }));
+    return;
+  }
+  
+  if (nickname.length > CHAT_NICKNAME_MAX_LENGTH) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Nickname too long (max ${CHAT_NICKNAME_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
+  
+  // Store nickname
+  ws.chat.nickname = nickname;
+  
+  // Check if nickname is reserved (do this BEFORE blocked word check)
+  if (ChatData.isReservedNickname(nickname)) {
+    // Check if IP is already verified for this nickname
+    if (ChatData.isIPVerified(clientIP, nickname)) {
+      // Auto-verify returning user
+      ws.chat.verifiedHuman = true;
+      ws.chat.challenge = null;
+      ChatData.updateIPLastSeen(clientIP);
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: true,
+        message: 'Welcome back! Auto-verified from known IP.'
+      }));
+    } else {
+      // Request password for reserved nickname
+      ws.chat.requiresPassword = true;
+      ws.send(JSON.stringify({
+        type: 'chat_password_required',
+        message: 'This is a reserved nickname. Please enter the password.'
+      }));
+    }
+    return; // Exit early for reserved nicknames
+  }
+  
+  // Check for blocked words in nickname (only for non-reserved nicknames)
+  const blockedWord = ChatData.containsBlockedWord(nickname);
+  if (blockedWord) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Nickname contains blocked word: "${blockedWord}"`
+    }));
+    return;
+  }
+  
+  // Regular nickname - generate math challenge
+  ws.chat.challenge = generateMathChallenge();
+  ws.chat.verifiedHuman = false;
+  ws.chat.requiresPassword = false;
+  
+  // Send challenge to client
+  ws.send(JSON.stringify({
+    type: 'chat_challenge',
+    question: ws.chat.challenge.question
+  }));
+}
+
+/**
+ * Handle chat_verify message: user answers the math challenge or provides password
+ * Message format: { type: "chat_verify", answer: number | string, password: string }
+ */
+function handleChatVerify(ws, message) {
+  const clientIP = ws._clientIP || 'unknown';
+  
+  // Check if this is a password verification
+  if (ws.chat.requiresPassword) {
+    const password = message.password || message.answer;
+    
+    if (!password) {
+      ws.send(JSON.stringify({
+        type: 'chat_error',
+        error: 'Password is required for this nickname'
+      }));
+      return;
+    }
+    
+    // Verify password
+    if (ChatData.verifyPassword(ws.chat.nickname, password)) {
+      // Password correct - mark as verified and save IP
+      ws.chat.verifiedHuman = true;
+      ws.chat.requiresPassword = false;
+      ChatData.addVerifiedIP(clientIP, ws.chat.nickname);
+      
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: true,
+        message: 'Password verified! Your IP has been saved for future logins.'
+      }));
+    } else {
+      // Password incorrect
+      ws.send(JSON.stringify({
+        type: 'chat_verified',
+        success: false,
+        error: 'Incorrect password. Please try again.'
+      }));
+      // Send password request again
+      ws.send(JSON.stringify({
+        type: 'chat_password_required',
+        message: 'This is a reserved nickname. Please enter the password.'
+      }));
+    }
+    return;
+  }
+  
+  // Regular math challenge verification
+  if (!ws.chat.challenge) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'No active challenge. Please start chat first.'
+    }));
+    return;
+  }
+  
+  const userAnswer = Number(message.answer);
+  const correctAnswer = ws.chat.challenge.answer;
+  
+  if (userAnswer === correctAnswer) {
+    // Verification successful
+    ws.chat.verifiedHuman = true;
+    ws.chat.challenge = null;
+    ws.send(JSON.stringify({
+      type: 'chat_verified',
+      success: true
+    }));
+  } else {
+    // Incorrect answer - generate new challenge
+    ws.chat.challenge = generateMathChallenge();
+    ws.send(JSON.stringify({
+      type: 'chat_verified',
+      success: false,
+      error: 'Incorrect answer. Try again.'
+    }));
+    // Send new challenge
+    ws.send(JSON.stringify({
+      type: 'chat_challenge',
+      question: ws.chat.challenge.question
+    }));
+  }
+}
+
+/**
+ * Handle chat_message: user sends a chat message (after verification)
+ * Message format: { type: "chat_message", text: string }
+ */
+function handleChatMessage(ws, message) {
+  // Check if user is verified
+  if (!ws.chat.verifiedHuman) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Please solve the challenge before chatting.'
+    }));
+    return;
+  }
+  
+  // Rate limiting - check cooldown
+  const now = Date.now();
+  const timeSinceLastMessage = now - ws.chat.lastChatAt;
+  if (timeSinceLastMessage < CHAT_MESSAGE_COOLDOWN_MS) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'You are sending messages too quickly.'
+    }));
+    return;
+  }
+  
+  // Validate and sanitize message text
+  const text = (message.text || '').trim();
+  if (!text) {
+    return; // Silently ignore empty messages
+  }
+  
+  // Enforce max length (reject if too long)
+  if (text.length > CHAT_MESSAGE_MAX_LENGTH) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Message too long (max ${CHAT_MESSAGE_MAX_LENGTH} characters)`
+    }));
+    return;
+  }
+  
+  // Check for blocked words in message
+  const blockedWord = ChatData.containsBlockedWord(text);
+  if (blockedWord) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: `Message contains blocked word: "${blockedWord}"`
+    }));
+    return;
+  }
+  
+  // Update last chat timestamp
+  ws.chat.lastChatAt = now;
+  
+  // Construct chat message payload
+  const chatPayload = {
+    type: 'chat_message',
+    nickname: ws.chat.nickname || 'Anon',
+    text: text,
+    timestamp: new Date().toISOString()
+  };
+  
+  // Broadcast to all connected clients (no persistence - only in-memory)
+  const data = JSON.stringify(chatPayload);
+  webClients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  });
+}
+
 
 
 // --- Broadcast message to all connected web clients, throttled to once per second ---
@@ -799,6 +1095,9 @@ async function autoConnect() {
 // Start server
 server.listen(PORT, () => {
   console.log(`Elegoo Print Monitor server running on http://localhost:${PORT}`);
+  
+  // Load chat data
+  ChatData.loadData();
   
   // Auto-connect to printer on startup
   autoConnect();

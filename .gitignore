@@ -103,3 +103,8 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Chat data files (keep examples, ignore actual data)
+data/reserved-nicknames.json
+data/verified-ips.json
+data/blocked-words.json
