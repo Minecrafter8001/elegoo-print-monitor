@@ -410,7 +410,7 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'status', data: buildStatusPayload() }));
 
   // Handle incoming messages from client
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
       
@@ -420,7 +420,7 @@ wss.on('connection', (ws, req) => {
       } else if (message.type === 'chat_verify') {
         handleChatVerify(ws, message);
       } else if (message.type === 'chat_message') {
-        handleChatMessage(ws, message);
+        await handleChatMessage(ws, message);
       }
       // Future: handle other message types here
       // Existing clients that don't send these types are unaffected
@@ -612,7 +612,7 @@ function handleChatVerify(ws, message) {
  * Handle chat_message: user sends a comment on the current print
  * Message format: { type: "chat_message", text: string, printId: string (optional) }
  */
-function handleChatMessage(ws, message) {
+async function handleChatMessage(ws, message) {
   // Check if user is verified
   if (!ws.chat.verifiedHuman) {
     ws.send(JSON.stringify({
@@ -664,7 +664,7 @@ function handleChatMessage(ws, message) {
   
   if (printId) {
     // Comment on a specific historical print
-    targetPrint = PrintHistory.getPrintById(printId);
+    targetPrint = await PrintHistory.getPrintById(printId);
     if (!targetPrint) {
       ws.send(JSON.stringify({
         type: 'chat_error',
@@ -688,7 +688,7 @@ function handleChatMessage(ws, message) {
   ws.chat.lastChatAt = now;
   
   // Add comment to the print
-  const comment = PrintHistory.addComment(
+  const comment = await PrintHistory.addComment(
     targetPrint.id,
     ws.chat.nickname || 'Anon',
     text

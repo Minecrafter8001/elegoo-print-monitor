@@ -133,7 +133,7 @@ async function startPrint(filename) {
   }
   
   currentPrint = {
-    id: `print_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: `print_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
     filename: filename,
     startTime: new Date().toISOString(),
     endTime: null,
@@ -228,7 +228,7 @@ async function addComment(printId, nickname, text) {
   if (!print) return null;
   
   const comment = {
-    id: `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    id: `comment_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
     nickname: nickname || 'Anonymous',
     text: text,
     timestamp: new Date().toISOString()
