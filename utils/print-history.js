@@ -229,7 +229,7 @@ async function addComment(printId, nickname, text) {
   
   const comment = {
     id: `comment_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
-    nickname: nickname || 'Anonymous',
+    nickname: nickname || 'Anon',
     text: text,
     timestamp: new Date().toISOString()
   };

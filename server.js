@@ -874,7 +874,9 @@ function updatePrinterStatus(data) {
       // Manual progress calculations removed; only using printer-reported progress and remainingTime
       
       // Track print completion (when progress reaches 100%)
-      if (printerStatus.progress >= 100 && PrintHistory.getCurrentPrint()) {
+      // Only complete once per print to avoid multiple calls
+      const currentPrintObj = PrintHistory.getCurrentPrint();
+      if (printerStatus.progress >= 100 && currentPrintObj && currentPrintObj.status === 'printing') {
         PrintHistory.completePrint();
       }
     }

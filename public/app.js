@@ -68,6 +68,11 @@ function saveSettings() {
     }
 }
 
+// Helper function to get camera URL with cache busting
+function getCameraUrl() {
+    return '/api/camera?' + Date.now();
+}
+
 // ---------------- WEBSOCKET ----------------
 
 function connectWebSocket() {
@@ -309,7 +314,7 @@ function updateUI(payload) {
     if (printer.cameraAvailable) {
         const isIdle = jobState === "IDLE" || machineState === "IDLE";
         if (!cameraInitialized) {
-            cameraFeed.src = '/api/camera?' + Date.now(); // Add timestamp to force fresh connection
+            cameraFeed.src = getCameraUrl();
             cameraInitialized = true;
 
             cameraFeed.onload = function () {
@@ -330,7 +335,7 @@ function updateUI(payload) {
                 console.warn('Camera feed error, attempting to reconnect...');
                 if (!snapshotTaken && cameraInitialized) {
                     setTimeout(() => {
-                        cameraFeed.src = '/api/camera?' + Date.now();
+                        cameraFeed.src = getCameraUrl();
                     }, 1000);
                 }
             };
@@ -341,7 +346,7 @@ function updateUI(payload) {
             // Only reset src if we have a snapshot taken or if it's not set to the stream
             if (snapshotTaken || !cameraFeed.src.includes('/api/camera')) {
                 snapshotTaken = false;
-                cameraFeed.src = '/api/camera?' + Date.now();
+                cameraFeed.src = getCameraUrl();
             }
             cameraOverlay.style.display = 'none';
         }
@@ -535,8 +540,16 @@ function handleChatVerified(message) {
 
 function handleChatMessage(message) {
     // Only update if it's for the print we're currently viewing
-    if (message.printId && message.printId !== selectedPrintId && selectedPrintId !== "current") {
-        return;
+    if (selectedPrintId === "current") {
+        // For current print, check if message is for the current print
+        if (message.printId && message.printId !== currentPrintId) {
+            return;
+        }
+    } else {
+        // For historical prints, only show if it matches the selected print
+        if (message.printId !== selectedPrintId) {
+            return;
+        }
     }
     
     // Add the new comment to the display
@@ -772,7 +785,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const cameraFeed = document.getElementById('cameraFeed');
             if (cameraFeed && cameraFeed.style.display !== 'none') {
                 // Force reconnect camera stream
-                cameraFeed.src = '/api/camera?' + Date.now();
+                cameraFeed.src = getCameraUrl();
             }
         }
     });
