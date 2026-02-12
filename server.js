@@ -15,6 +15,7 @@ const { getClientIP, isLocalIP } = require('utils/ip-utils');
 const { parseStatusPayload } = require('utils/status-utils');
 const UserStats = require('utils/user-stats');
 const ChatData = require('utils/chat-data');
+const PrintHistory = require('utils/print-history');
 
 const PrinterDiscovery = require('utils/printer-discovery');
 const SDCPClient = require('utils/sdcp-client');
@@ -213,9 +214,16 @@ function setDisconnectedStatus() {
 
 function buildStatusPayload() {
   printerStatus.users = printerStatus.users || userStats.getSnapshot();
+  const currentPrint = PrintHistory.getCurrentPrint();
   return {
     printer: printerStatus,
-    users: userStats.getSnapshot()
+    users: userStats.getSnapshot(),
+    currentPrint: currentPrint ? {
+      id: currentPrint.id,
+      filename: currentPrint.filename,
+      startTime: currentPrint.startTime,
+      comments: currentPrint.comments
+    } : null
   };
 }
 
@@ -293,6 +301,30 @@ app.post('/api/connect/:ip', express.json(), async (req, res) => {
     res.json({ success: true, message: 'Connected to printer' });
   } catch (err) {
     printerStatus.connected = false;
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API endpoint to get print history
+app.get('/api/prints', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const history = await PrintHistory.getHistory(limit);
+    res.json({ success: true, prints: history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API endpoint to get a specific print with comments
+app.get('/api/prints/:id', async (req, res) => {
+  try {
+    const print = await PrintHistory.getPrintById(req.params.id);
+    if (!print) {
+      return res.status(404).json({ success: false, error: 'Print not found' });
+    }
+    res.json({ success: true, print });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -378,7 +410,7 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'status', data: buildStatusPayload() }));
 
   // Handle incoming messages from client
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
       
@@ -388,7 +420,7 @@ wss.on('connection', (ws, req) => {
       } else if (message.type === 'chat_verify') {
         handleChatVerify(ws, message);
       } else if (message.type === 'chat_message') {
-        handleChatMessage(ws, message);
+        await handleChatMessage(ws, message);
       }
       // Future: handle other message types here
       // Existing clients that don't send these types are unaffected
@@ -577,15 +609,15 @@ function handleChatVerify(ws, message) {
 }
 
 /**
- * Handle chat_message: user sends a chat message (after verification)
- * Message format: { type: "chat_message", text: string }
+ * Handle chat_message: user sends a comment on the current print
+ * Message format: { type: "chat_message", text: string, printId: string (optional) }
  */
-function handleChatMessage(ws, message) {
+async function handleChatMessage(ws, message) {
   // Check if user is verified
   if (!ws.chat.verifiedHuman) {
     ws.send(JSON.stringify({
       type: 'chat_error',
-      error: 'Please solve the challenge before chatting.'
+      error: 'Please solve the challenge before commenting.'
     }));
     return;
   }
@@ -626,19 +658,58 @@ function handleChatMessage(ws, message) {
     return;
   }
   
+  // Get the print to comment on (either specified or current)
+  const printId = message.printId;
+  let targetPrint;
+  
+  if (printId) {
+    // Comment on a specific historical print
+    targetPrint = await PrintHistory.getPrintById(printId);
+    if (!targetPrint) {
+      ws.send(JSON.stringify({
+        type: 'chat_error',
+        error: 'Print not found.'
+      }));
+      return;
+    }
+  } else {
+    // Comment on current print
+    targetPrint = PrintHistory.getCurrentPrint();
+    if (!targetPrint) {
+      ws.send(JSON.stringify({
+        type: 'chat_error',
+        error: 'No active print to comment on.'
+      }));
+      return;
+    }
+  }
+  
   // Update last chat timestamp
   ws.chat.lastChatAt = now;
   
-  // Construct chat message payload
-  const chatPayload = {
+  // Add comment to the print
+  const comment = await PrintHistory.addComment(
+    targetPrint.id,
+    ws.chat.nickname || 'Anon',
+    text
+  );
+  
+  if (!comment) {
+    ws.send(JSON.stringify({
+      type: 'chat_error',
+      error: 'Failed to add comment.'
+    }));
+    return;
+  }
+  
+  // Broadcast the new comment to all connected clients
+  const commentPayload = {
     type: 'chat_message',
-    nickname: ws.chat.nickname || 'Anon',
-    text: text,
-    timestamp: new Date().toISOString()
+    printId: targetPrint.id,
+    comment: comment
   };
   
-  // Broadcast to all connected clients (no persistence - only in-memory)
-  const data = JSON.stringify(chatPayload);
+  const data = JSON.stringify(commentPayload);
   webClients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(data);
@@ -760,6 +831,13 @@ function updatePrinterStatus(data) {
     if (printerStatus.status.consolidated !== use_new_status) {
       console.log(`[Status] Status changed: ${printerStatus.status.consolidated} -> ${use_new_status}`);
       printerStatus.prev_status = printerStatus.status.consolidated;
+      
+      // Handle print cancellation
+      if ((use_new_status === 'IDLE' || use_new_status === 'CANCELLED') && 
+          printerStatus.prev_status === 'PRINTING' && 
+          PrintHistory.getCurrentPrint()) {
+        PrintHistory.cancelPrint();
+      }
     }
     
     printerStatus.status = status;
@@ -776,7 +854,14 @@ function updatePrinterStatus(data) {
     if (s.PrintInfo) {
       // Use printer-reported progress directly
       printerStatus.progress = s.PrintInfo.Progress || 0;
-      printerStatus.currentFile = s.PrintInfo.Filename || '';
+      const newFilename = s.PrintInfo.Filename || '';
+      
+      // Track print start
+      if (newFilename && newFilename !== printerStatus.currentFile) {
+        PrintHistory.startPrint(newFilename);
+      }
+      
+      printerStatus.currentFile = newFilename;
       // Convert ticks to seconds for time display
       printerStatus.printTime = Math.floor(s.PrintInfo.CurrentTicks || 0);
       const totalTicks = s.PrintInfo.TotalTicks || 0;
@@ -787,6 +872,13 @@ function updatePrinterStatus(data) {
         current: s.PrintInfo.CurrentLayer || 0
       };
       // Manual progress calculations removed; only using printer-reported progress and remainingTime
+      
+      // Track print completion (when progress reaches 100%)
+      // Only complete once per print to avoid multiple calls
+      const currentPrintObj = PrintHistory.getCurrentPrint();
+      if (printerStatus.progress >= 100 && currentPrintObj && currentPrintObj.status === 'printing') {
+        PrintHistory.completePrint();
+      }
     }
     // Temperatures - using actual field names from printer
     if (s.TempOfHotbed !== undefined) {

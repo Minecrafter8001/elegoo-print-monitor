@@ -12,6 +12,8 @@ let toastIdCounter = 0;
 // Chat state
 let chatVerified = false;
 let chatNickname = "";
+let selectedPrintId = "current"; // Track which print we're viewing
+let currentPrintId = null; // Track the actual current print ID from server
 
 // Settings object
 const defaultSettings = {
@@ -66,6 +68,11 @@ function saveSettings() {
     }
 }
 
+// Helper function to get camera URL with cache busting
+function getCameraUrl() {
+    return '/api/camera?' + Date.now();
+}
+
 // ---------------- WEBSOCKET ----------------
 
 function connectWebSocket() {
@@ -85,6 +92,18 @@ function connectWebSocket() {
             if (message.type === 'status') {
                 lastPayload = message.data;
                 updateUI(message.data);
+                
+                // Update current print ID and load print history when it changes
+                if (message.data.currentPrint) {
+                    if (currentPrintId !== message.data.currentPrint.id) {
+                        currentPrintId = message.data.currentPrint.id;
+                        loadPrintHistory();
+                    }
+                    // Update comments if viewing current print
+                    if (selectedPrintId === "current") {
+                        displayComments(message.data.currentPrint.comments || []);
+                    }
+                }
             } else if (message.type === 'server_restarting') {
                 showToast({
                     title: 'Server restarting…',
@@ -282,7 +301,7 @@ function updateUI(payload) {
     document.getElementById('enclosureTemp').textContent = Math.round(temps.enclosure.current || 0);
     document.getElementById('enclosureTarget').textContent = Math.round(temps.enclosure.target || 0);
 
-    // ---------------- CAMERA LOGIC (UNCHANGED) ----------------
+    // ---------------- CAMERA LOGIC ----------------
 
     const cameraFeed = document.getElementById('cameraFeed');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
@@ -295,7 +314,7 @@ function updateUI(payload) {
     if (printer.cameraAvailable) {
         const isIdle = jobState === "IDLE" || machineState === "IDLE";
         if (!cameraInitialized) {
-            cameraFeed.src = '/api/camera';
+            cameraFeed.src = getCameraUrl();
             cameraInitialized = true;
 
             cameraFeed.onload = function () {
@@ -310,6 +329,16 @@ function updateUI(payload) {
                     cameraFeed.onload = null;
                 }
             };
+            
+            // Add error handler to recover from broken streams
+            cameraFeed.onerror = function() {
+                console.warn('Camera feed error, attempting to reconnect...');
+                if (!snapshotTaken && cameraInitialized) {
+                    setTimeout(() => {
+                        cameraFeed.src = getCameraUrl();
+                    }, 1000);
+                }
+            };
         }
         if (isIdle && settings.pauseOnIdle) {
             cameraOverlay.style.display = 'flex';
@@ -317,7 +346,7 @@ function updateUI(payload) {
             // Only reset src if we have a snapshot taken or if it's not set to the stream
             if (snapshotTaken || !cameraFeed.src.includes('/api/camera')) {
                 snapshotTaken = false;
-                cameraFeed.src = '/api/camera';
+                cameraFeed.src = getCameraUrl();
             }
             cameraOverlay.style.display = 'none';
         }
@@ -476,12 +505,16 @@ function handleChatVerified(message) {
         chatVerified = true;
         const chatChallenge = document.getElementById('chat-challenge');
         const chatPassword = document.getElementById('chat-password');
-        const chatMain = document.getElementById('chat-main');
+        const chatSetup = document.getElementById('chat-setup');
+        const chatLoginSection = document.getElementById('chat-login-section');
+        const chatInputArea = document.getElementById('chat-input-area');
         const chatInput = document.getElementById('chat-input');
         
         chatChallenge.style.display = 'none';
         chatPassword.style.display = 'none';
-        chatMain.style.display = 'flex';
+        chatSetup.style.display = 'none';
+        chatLoginSection.style.display = 'none';
+        chatInputArea.style.display = 'flex';
         chatInput.focus();
         
         // Show welcome message if provided
@@ -506,6 +539,26 @@ function handleChatVerified(message) {
 }
 
 function handleChatMessage(message) {
+    // Only update if it's for the print we're currently viewing
+    if (selectedPrintId === "current") {
+        // For current print, check if message is for the current print
+        if (message.printId && message.printId !== currentPrintId) {
+            return;
+        }
+    } else {
+        // For historical prints, only show if it matches the selected print
+        if (message.printId !== selectedPrintId) {
+            return;
+        }
+    }
+    
+    // Add the new comment to the display
+    if (message.comment) {
+        addCommentToDisplay(message.comment);
+    }
+}
+
+function addCommentToDisplay(comment) {
     const chatMessages = document.getElementById('chat-messages');
     const messageDiv = document.createElement('div');
     messageDiv.className = 'chat-message';
@@ -515,11 +568,11 @@ function handleChatMessage(message) {
     
     const nickname = document.createElement('span');
     nickname.className = 'chat-nickname';
-    nickname.textContent = message.nickname || 'Anon';
+    nickname.textContent = comment.nickname || 'Anonymous';
     
     const timestamp = document.createElement('span');
     timestamp.className = 'chat-timestamp';
-    const time = new Date(message.timestamp);
+    const time = new Date(comment.timestamp);
     timestamp.textContent = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
     header.appendChild(nickname);
@@ -527,7 +580,7 @@ function handleChatMessage(message) {
     
     const text = document.createElement('div');
     text.className = 'chat-text';
-    text.textContent = message.text;
+    text.textContent = comment.text;
     
     messageDiv.appendChild(header);
     messageDiv.appendChild(text);
@@ -537,12 +590,82 @@ function handleChatMessage(message) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+function displayComments(comments) {
+    const chatMessages = document.getElementById('chat-messages');
+    chatMessages.innerHTML = ''; // Clear existing
+    
+    if (!comments || comments.length === 0) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'chat-placeholder';
+        placeholder.textContent = 'No comments yet. Be the first to comment!';
+        chatMessages.appendChild(placeholder);
+        return;
+    }
+    
+    comments.forEach(comment => {
+        addCommentToDisplay(comment);
+    });
+}
+
 function handleChatError(message) {
     showToast({
         title: 'Chat Error',
         body: message.error || 'An error occurred',
         duration: 3000
     });
+}
+
+// Load print history from server
+async function loadPrintHistory() {
+    try {
+        const response = await fetch('/api/prints?limit=10');
+        const data = await response.json();
+        
+        if (data.success) {
+            const printSelect = document.getElementById('print-select');
+            
+            // Clear existing options except "current"
+            printSelect.innerHTML = '<option value="current">Current Print</option>';
+            
+            // Add historical prints
+            data.prints.forEach(print => {
+                const option = document.createElement('option');
+                option.value = print.id;
+                const date = new Date(print.startTime).toLocaleDateString();
+                const status = print.status === 'completed' ? '✓' : '✗';
+                option.textContent = `${status} ${print.filename} (${date})`;
+                printSelect.appendChild(option);
+            });
+        }
+    } catch (err) {
+        console.error('Failed to load print history:', err);
+    }
+}
+
+// Handle print selection change
+async function handlePrintSelection(printId) {
+    selectedPrintId = printId;
+    
+    if (printId === "current") {
+        // Show current print comments from the latest status
+        if (lastPayload && lastPayload.currentPrint) {
+            displayComments(lastPayload.currentPrint.comments || []);
+        } else {
+            displayComments([]);
+        }
+    } else {
+        // Load historical print comments
+        try {
+            const response = await fetch(`/api/prints/${printId}`);
+            const data = await response.json();
+            
+            if (data.success && data.print) {
+                displayComments(data.print.comments || []);
+            }
+        } catch (err) {
+            console.error('Failed to load print comments:', err);
+        }
+    }
 }
 
 function initChatHandlers() {
@@ -618,7 +741,14 @@ function initChatHandlers() {
             return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'chat_message', text }));
+            const payload = { type: 'chat_message', text };
+            
+            // Only add printId if we're viewing a specific historical print
+            if (selectedPrintId !== "current") {
+                payload.printId = selectedPrintId;
+            }
+            
+            ws.send(JSON.stringify(payload));
             chatInputField.value = '';
         }
     });
@@ -628,6 +758,12 @@ function initChatHandlers() {
         if (e.key === 'Enter') {
             chatSendBtn.click();
         }
+    });
+    
+    // Print selector change handler
+    const printSelect = document.getElementById('print-select');
+    printSelect.addEventListener('change', (e) => {
+        handlePrintSelection(e.target.value);
     });
 }
 
@@ -641,4 +777,16 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => {
         updateUI(lastPayload);
     }, 1000);
+    
+    // Handle page visibility changes to recover camera feed when page wakes up
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && cameraInitialized && !snapshotTaken) {
+            console.log('Page visible again, refreshing camera feed...');
+            const cameraFeed = document.getElementById('cameraFeed');
+            if (cameraFeed && cameraFeed.style.display !== 'none') {
+                // Force reconnect camera stream
+                cameraFeed.src = getCameraUrl();
+            }
+        }
+    });
 });
