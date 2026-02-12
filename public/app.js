@@ -637,6 +637,22 @@ document.addEventListener('DOMContentLoaded', () => {
     initChatHandlers();
     connectWebSocket();
 
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        const cameraFeed = document.getElementById('cameraFeed');
+        const cameraOverlay = document.getElementById('cameraOverlay');
+        const cameraAvailable = lastPayload?.printer?.cameraAvailable;
+
+        if (cameraAvailable && cameraFeed) {
+            snapshotTaken = false;
+            cameraInitialized = true;
+            cameraFeed.src = '/api/camera';
+            if (cameraOverlay) {
+                cameraOverlay.style.display = settings.pauseOnIdle ? 'flex' : 'none';
+            }
+        }
+    });
+
     // Update UI every second to keep clock and other elements fresh
     setInterval(() => {
         updateUI(lastPayload);
