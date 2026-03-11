@@ -692,6 +692,48 @@ footer {
     background: #00d4ff;
 }
 
+/* Print selector styles */
+.print-selector {
+    margin-bottom: 15px;
+}
+
+.print-select {
+    width: 100%;
+    padding: 10px 15px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 1em;
+    cursor: pointer;
+}
+
+.print-select:focus {
+    outline: none;
+    border-color: #00d4ff;
+    box-shadow: 0 0 6px rgba(0, 212, 255, 0.3);
+}
+
+.print-select option {
+    background: #0f3460;
+    color: #e0e0e0;
+}
+
+/* Chat placeholder for no comments */
+.chat-placeholder {
+    text-align: center;
+    color: #808080;
+    padding: 40px 20px;
+    font-style: italic;
+}
+
+/* Login section styles */
+#chat-login-section {
+    margin-bottom: 15px;
+    border-top: 1px solid #1a4d7a;
+    padding-top: 15px;
+}
+
 /* Responsive adjustments for chat */
 @media (max-width: 768px) {
     .chat-card {
